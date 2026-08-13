@@ -1,0 +1,9 @@
+.env
+device_credentials.json
+*.db
+*.db-wal
+*.db-shm
+*.csv
+*.log
+__pycache__/
+*.pyc

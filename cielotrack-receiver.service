@@ -1,0 +1,19 @@
+[Unit]
+Description=CieloTrack Receiver (BLE + Wi-Fi Remote ID capture)
+# network-online rather than network: the tracker registers with the server on start,
+# and a half-configured interface makes that fail in ways that look like a bad key.
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+
+[Service]
+Type=simple
+# Adjust both paths if you install somewhere other than /opt/cielotrack-receiver.
+WorkingDirectory=/opt/cielotrack-receiver
+ExecStart=/usr/bin/python3 -u /opt/cielotrack-receiver/radio_tracker.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
