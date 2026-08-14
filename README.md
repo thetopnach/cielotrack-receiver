@@ -58,6 +58,30 @@ picks up its API key within a minute and starts reporting.
 The key is handed over exactly once and then erased server-side, so it never sits in a
 database waiting to be read. If a receiver loses its key, claim it again.
 
+## Checking it works
+
+The receiver writes `status.json` beside itself every minute. It needs neither the
+server nor a claimed device, which is the point — those are usually what you are trying
+to diagnose.
+
+```bash
+cat /opt/cielotrack-receiver/status.json
+```
+
+`radios.problems` is empty when both radios are configured as intended.
+`pipeline.frames_seen` versus `pipeline.messages_decoded` separates the two silences a
+heartbeat cannot tell apart: frames arriving but nothing decoding is a decoder problem,
+nothing arriving at all is a radio problem.
+
+## Tests
+
+```bash
+python3 tests/test_receiver_state.py
+```
+
+No framework needed. They cover the contact state machine — where the receiver decides
+whether a drone that was heard becomes a drone that was recorded.
+
 ## Things that cost us time
 
 Written down because none of them are obvious, and each one looked like "this project

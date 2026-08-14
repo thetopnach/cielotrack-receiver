@@ -27,6 +27,18 @@ drone_state = {}
 LOG_FILE = "amazon_drone_matches.csv"
 
 # --- 📡 HARDWARE INTERFACE ROUTING ---
+
+def privileged(command):
+    """A command list, with sudo prepended only when we are not already root.
+
+    The service runs as root, where sudo is redundant — and worse than redundant under
+    NoNewPrivileges, which blocks the setuid sudo needs and made every hcidump and
+    hcitool call fail. Someone running this by hand as a normal user still gets the
+    prompt they expect.
+    """
+    return list(command) if os.geteuid() == 0 else ["sudo"] + list(command)
+
+
 def detect_ble_interface():
     """The Bluetooth adapter to capture on: BLE_INTERFACE if set, else whichever
     hciN actually exists.
@@ -121,6 +133,31 @@ HEARTBEAT_WARMUP_SECONDS = 20
 # Matches the Wi-Fi path's retry cadence.
 BLE_RETRY_SECONDS = 10
 OUTBOX_BATCH_SIZE = 20
+# Several threads write this file: capture timers enqueue detections, the sync loop
+# marks them sent, and identity writes land from finalisation. Without a busy timeout
+# the loser of a race raises "database is locked" immediately and the caller loses
+# whatever it was writing — for the enqueue path, that is a detection that was heard
+# and then dropped.
+SQLITE_BUSY_TIMEOUT = 10
+
+_credentials = None
+_credentials_lock = threading.Lock()
+
+
+def get_credentials():
+    """The one credential object every thread shares.
+
+    Loading it separately per thread meant the API key written into the sync loop's
+    copy when a receiver was claimed never reached the heartbeat thread's copy — so a
+    freshly claimed receiver uploaded detections but never reported itself alive until
+    the process restarted, and the fleet page showed it offline while it worked.
+    ensure_claimed() mutates this dict in place, so sharing the object is the fix."""
+    global _credentials
+    with _credentials_lock:
+        if _credentials is None:
+            _credentials = load_or_create_credentials()
+        return _credentials
+
 
 def load_or_create_credentials():
     """A device's identity (device_id + bootstrap_secret) is generated once, locally,
@@ -134,11 +171,27 @@ def load_or_create_credentials():
     return creds
 
 def save_credentials(creds):
-    with open(CREDENTIALS_FILE, "w") as f:
+    """Writes the credential file readable only by its owner, atomically.
+
+    It holds the API key that authorises this receiver to upload. Written with the
+    process umask it could land world-readable, and a half-written file would leave a
+    receiver unable to authenticate after a power cut.
+    """
+    temporary = CREDENTIALS_FILE + ".tmp"
+    handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(handle, "w") as f:
         json.dump(creds, f, indent=2)
+    os.replace(temporary, CREDENTIALS_FILE)
+    try:
+        os.chmod(CREDENTIALS_FILE, 0o600)   # also fixes a file created before this
+    except OSError:
+        pass
 
 def init_outbox_db():
-    conn = sqlite3.connect(OUTBOX_DB)
+    conn = sqlite3.connect(OUTBOX_DB, timeout=SQLITE_BUSY_TIMEOUT)
+    # WAL lets the sync loop read while a capture thread writes, instead of the two
+    # blocking each other. Set once here; it persists with the database file.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS outbox (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,6 +209,15 @@ def init_outbox_db():
             last_decoded_at REAL NOT NULL
         )
     """)
+    # Added after the fact: rows the server refused are kept with the reason rather
+    # than retried forever or silently marked sent.
+    if "error" not in {r[1] for r in conn.execute("PRAGMA table_info(outbox)")}:
+        conn.execute("ALTER TABLE outbox ADD COLUMN error TEXT")
+    identity_columns = {r[1] for r in conn.execute("PRAGMA table_info(mac_identity)")}
+    if "sightings" not in identity_columns:
+        conn.execute("ALTER TABLE mac_identity ADD COLUMN sightings INTEGER NOT NULL DEFAULT 1")
+    if "quarantined" not in identity_columns:
+        conn.execute("ALTER TABLE mac_identity ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -170,39 +232,79 @@ def init_outbox_db():
 # decoded: it's an inference from a hardware address, not something this pass actually
 # heard, and an aviation log shouldn't blur that line. The TTL bounds the risk of a
 # MAC being randomized or reassigned to a different aircraft.
-IDENTITY_CACHE_TTL_SECONDS = 7 * 24 * 3600
+# One sighting is a hint; several are a fact. A MAC seen once keeps its association
+# for minutes, long enough to cover a single pass that arrives in fragments. Only a
+# MAC decoded to the same UAS ID repeatedly, with no conflict, is trusted for days.
+IDENTITY_WEAK_TTL_SECONDS = 15 * 60
+IDENTITY_STRONG_TTL_SECONDS = 7 * 24 * 3600
+IDENTITY_STRONG_SIGHTINGS = 3
 
 def remember_identity(mac, telemetry):
-    """Records a freshly *decoded* identity for this MAC. No-op for inferred values."""
+    """Records a freshly *decoded* identity for this MAC. No-op for inferred values.
+
+    Conflict-aware rather than latest-write-wins. A MAC that has reported two different
+    UAS IDs is not evidence of anything: it is either randomised, reassigned, or being
+    spoofed, and the previous behaviour — overwrite and keep serving inferences for a
+    week — turned that into confidently mislabelled aircraft. Such a MAC is quarantined
+    instead, and never used for inference again until it is decoded consistently.
+    """
     uas_id = telemetry.get("uas_id")
     if not uas_id or uas_id == "N/A":
         return
     try:
-        conn = sqlite3.connect(OUTBOX_DB)
-        conn.execute(
-            "INSERT INTO mac_identity (mac, uas_id, ua_type, id_type, last_decoded_at) "
-            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(mac) DO UPDATE SET "
-            "uas_id=excluded.uas_id, ua_type=excluded.ua_type, id_type=excluded.id_type, "
-            "last_decoded_at=excluded.last_decoded_at",
-            (mac, uas_id, telemetry.get("ua_type"), telemetry.get("id_type"), time.time()))
+        conn = sqlite3.connect(OUTBOX_DB, timeout=SQLITE_BUSY_TIMEOUT)
+        conn.row_factory = sqlite3.Row
+        existing = conn.execute("SELECT * FROM mac_identity WHERE mac = ?", (mac,)).fetchone()
+        now = time.time()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO mac_identity (mac, uas_id, ua_type, id_type, last_decoded_at, "
+                "sightings, quarantined) VALUES (?, ?, ?, ?, ?, 1, 0)",
+                (mac, uas_id, telemetry.get("ua_type"), telemetry.get("id_type"), now))
+        elif existing["uas_id"] == uas_id:
+            # Same answer again. Each independent sighting is what earns this
+            # association the right to be inferred from later.
+            conn.execute(
+                "UPDATE mac_identity SET ua_type=?, id_type=?, last_decoded_at=?, "
+                "sightings=sightings+1 WHERE mac=?",
+                (telemetry.get("ua_type"), telemetry.get("id_type"), now, mac))
+        else:
+            conn.execute(
+                "UPDATE mac_identity SET quarantined=1, last_decoded_at=? WHERE mac=?",
+                (now, mac))
+            print(f"⚠️ Identity conflict for {mac}: had {existing['uas_id']}, now {uas_id} — "
+                  f"quarantined, no longer used for inference")
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"⚠️ Identity cache write failed for {mac}: {e}")
 
 def lookup_identity(macs):
-    """Returns a previously decoded identity for any of these MACs, or None."""
+    """A previously decoded identity for any of these MACs, or None.
+
+    Two horizons rather than one. A single sighting is weak evidence and expires in
+    minutes; an association seen repeatedly, with no conflicting ID, is trusted for
+    days. That keeps the thing the cache was built for — naming an aircraft whose pass
+    only yielded a System message — without letting one stray decode label a different
+    airframe for a week.
+    """
     try:
-        conn = sqlite3.connect(OUTBOX_DB)
+        conn = sqlite3.connect(OUTBOX_DB, timeout=SQLITE_BUSY_TIMEOUT)
         conn.row_factory = sqlite3.Row
-        cutoff = time.time() - IDENTITY_CACHE_TTL_SECONDS
         placeholders = ','.join('?' * len(macs))
-        row = conn.execute(
-            f"SELECT * FROM mac_identity WHERE mac IN ({placeholders}) AND last_decoded_at >= ? "
-            f"ORDER BY last_decoded_at DESC LIMIT 1",
-            list(macs) + [cutoff]).fetchone()
+        rows = conn.execute(
+            f"SELECT * FROM mac_identity WHERE mac IN ({placeholders}) AND quarantined = 0 "
+            f"ORDER BY last_decoded_at DESC", list(macs)).fetchall()
         conn.close()
-        return dict(row) if row else None
+        now = time.time()
+        for row in rows:
+            age = now - row["last_decoded_at"]
+            horizon = (IDENTITY_STRONG_TTL_SECONDS
+                       if (row["sightings"] or 0) >= IDENTITY_STRONG_SIGHTINGS
+                       else IDENTITY_WEAK_TTL_SECONDS)
+            if age <= horizon:
+                return dict(row)
+        return None
     except Exception as e:
         print(f"⚠️ Identity cache read failed: {e}")
         return None
@@ -228,11 +330,21 @@ def enqueue_detection(icao_hex, protocol, telemetry, detected_at, identity_sourc
         "operator_location_type": telemetry.get("operator_location_type", "N/A"),
         "rssi_dbm": rssi_dbm,
     }
-    conn = sqlite3.connect(OUTBOX_DB)
-    conn.execute("INSERT INTO outbox (payload_json, created_at) VALUES (?, ?)",
-                 (json.dumps(payload), detected_at))
-    conn.commit()
-    conn.close()
+    # The one write that must never fail silently: this is the only copy of a
+    # detection that has not reached the server yet. It used to be uncaught, so a lock
+    # contention here raised inside a timer thread, where nothing was watching, and the
+    # detection was simply gone.
+    try:
+        conn = sqlite3.connect(OUTBOX_DB, timeout=SQLITE_BUSY_TIMEOUT)
+        conn.execute("INSERT INTO outbox (payload_json, created_at) VALUES (?, ?)",
+                     (json.dumps(payload), detected_at))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        with contact_lock:
+            pipeline_counters["enqueue_failures"] += 1
+        print(f"⚠️ Could not queue detection for upload ({type(e).__name__}: {e}) — "
+              f"it is still in the local CSV")
 
 def _central_request(method, path, headers=None, body=None, timeout=10):
     url = f"{CENTRAL_SERVER_URL}{path}"
@@ -272,10 +384,11 @@ def ensure_claimed(creds):
     return False
 
 def sync_outbox(creds):
-    conn = sqlite3.connect(OUTBOX_DB)
+    conn = sqlite3.connect(OUTBOX_DB, timeout=SQLITE_BUSY_TIMEOUT)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, payload_json FROM outbox WHERE sent_at IS NULL ORDER BY id LIMIT ?",
+        "SELECT id, payload_json FROM outbox WHERE sent_at IS NULL AND error IS NULL "
+        "ORDER BY id LIMIT ?",
         (OUTBOX_BATCH_SIZE,)
     ).fetchall()
     if not rows:
@@ -283,15 +396,53 @@ def sync_outbox(creds):
         return
 
     detections = [json.loads(r["payload_json"]) for r in rows]
+    ids = [r["id"] for r in rows]
     try:
-        _central_request("POST", "/v1/detections/batch",
-                          headers={"Authorization": f"Bearer {creds['api_key']}"},
-                          body={"detections": detections})
-        ids = [r["id"] for r in rows]
-        conn.execute(f"UPDATE outbox SET sent_at = ? WHERE id IN ({','.join('?' * len(ids))})",
-                     [datetime.now(timezone.utc).isoformat()] + ids)
+        try:
+            result = _central_request("POST", "/v1/detections/batch",
+                                      headers={"Authorization": f"Bearer {creds['api_key']}"},
+                                      body={"detections": detections})
+        except urllib.error.HTTPError as e:
+            # A batch where every row was rejected answers 400 with the same body shape
+            # as a partial success. Reading it is what separates "the server refused
+            # these rows" from "the network is down" — the first must not be retried
+            # forever, the second must be.
+            if e.code != 400:
+                raise
+            try:
+                result = json.loads(e.read().decode())
+            except Exception:
+                raise e
+
+        # The server accepts good rows and reports the bad ones by index. Marking the
+        # whole batch sent on any 2xx quietly discarded exactly the rows that needed
+        # attention, and left no trace that anything had been refused.
+        rejected = {}
+        for entry in (result or {}).get("errors") or []:
+            index = entry.get("index")
+            if isinstance(index, int) and 0 <= index < len(ids):
+                rejected[ids[index]] = str(entry.get("error", "rejected"))[:200]
+
+        accepted = [i for i in ids if i not in rejected]
+        now = datetime.now(timezone.utc).isoformat()
+        if accepted:
+            conn.execute(
+                f"UPDATE outbox SET sent_at = ? WHERE id IN ({','.join('?' * len(accepted))})",
+                [now] + accepted)
+        for row_id, reason in rejected.items():
+            # Kept, not deleted, and excluded from future batches: validation failures
+            # are deterministic, so retrying them forever would block the queue behind
+            # rows that can never succeed.
+            conn.execute("UPDATE outbox SET error = ? WHERE id = ?", (reason, row_id))
         conn.commit()
-        print(f"📡 Central server: synced {len(ids)} detection(s).")
+
+        truncated = (result or {}).get("errors_truncated") or 0
+        if accepted:
+            print(f"📡 Central server: synced {len(accepted)} detection(s).")
+        if rejected or truncated:
+            sample = next(iter(rejected.values()), "")
+            print(f"⚠️ Central server rejected {len(rejected) + truncated} detection(s), "
+                  f"kept locally for inspection: {sample}")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         print(f"⚠️ Central server sync failed, will retry: {e}")
     finally:
@@ -337,7 +488,7 @@ def collect_radio_status():
             problems.append("wifi_not_monitor")
 
     try:
-        conn = sqlite3.connect(OUTBOX_DB)
+        conn = sqlite3.connect(OUTBOX_DB, timeout=SQLITE_BUSY_TIMEOUT)
         pending = conn.execute("SELECT COUNT(*) FROM outbox WHERE sent_at IS NULL").fetchone()[0]
         conn.close()
     except Exception:
@@ -352,6 +503,57 @@ def collect_radio_status():
         "position": configured_position(),
         "problems": problems,
     }
+
+
+
+# A local answer to "is this receiver working", written every heartbeat.
+#
+# Health was previously visible only through the cloud, so diagnosing a receiver meant
+# the server had to be reachable and the receiver had to be claimed — precisely the
+# things that are often broken when someone is diagnosing a receiver. This file needs
+# neither.
+STATUS_FILE = os.environ.get(
+    "STATUS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "status.json"))
+SESSION_ID = secrets.token_hex(4)
+
+
+def write_status_file(radio_status):
+    """Writes the current status atomically, or logs why it could not.
+
+    Atomic because a reader is usually a person or script checking during a fault, and
+    half a JSON document is worse than a stale one.
+    """
+    with contact_lock:
+        counters = json.loads(json.dumps(pipeline_counters))
+    payload = {
+        "session": SESSION_ID,
+        "started_at": radio_state["started_at"],
+        "written_at": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+        "radios": radio_status,
+        "pipeline": counters,
+        "outbox": outbox_summary(),
+    }
+    try:
+        temporary = STATUS_FILE + ".tmp"
+        with open(temporary, "w") as handle:
+            json.dump(payload, handle, indent=2)
+        os.replace(temporary, STATUS_FILE)
+    except Exception as e:
+        print(f"⚠️ Could not write {STATUS_FILE}: {type(e).__name__}: {e}")
+
+
+def outbox_summary():
+    """How much is waiting, sent, and refused — the queue's own health."""
+    try:
+        conn = sqlite3.connect(OUTBOX_DB, timeout=SQLITE_BUSY_TIMEOUT)
+        row = conn.execute(
+            "SELECT COUNT(*) FILTER (WHERE sent_at IS NULL AND error IS NULL), "
+            "       COUNT(*) FILTER (WHERE sent_at IS NOT NULL), "
+            "       COUNT(*) FILTER (WHERE error IS NOT NULL) FROM outbox").fetchone()
+        conn.close()
+        return {"pending": row[0], "sent": row[1], "rejected": row[2]}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 def heartbeat_loop(creds):
@@ -370,12 +572,17 @@ def heartbeat_loop(creds):
     time.sleep(HEARTBEAT_WARMUP_SECONDS)
     while True:
         delay = HEARTBEAT_INTERVAL
+        # Written first and unconditionally: local health must not depend on the
+        # receiver being claimed or the server being reachable, which are exactly the
+        # conditions under which someone goes looking for it.
+        radio_status = collect_radio_status()
+        write_status_file(radio_status)
         try:
             if creds.get("api_key"):
                 _central_request(
                     "POST", f"/v1/devices/{creds['device_id']}/heartbeat",
                     headers={"Authorization": f"Bearer {creds['api_key']}"},
-                    body={"status": collect_radio_status()})
+                    body={"status": radio_status})
         except Exception as e:
             # Never fatal and never noisy: the central server being unreachable must
             # not disturb local capture, which is the part that actually matters.
@@ -391,7 +598,7 @@ def central_sync_loop():
     """Runs in a background thread for the life of the process — local BLE capture
     in the main thread never waits on any of this."""
     init_outbox_db()
-    creds = load_or_create_credentials()
+    creds = get_credentials()
     while True:
         try:
             if ensure_claimed(creds):
@@ -500,7 +707,45 @@ def parse_adv_reports(event):
 PENDING_ALERT_GRACE_SECONDS = 10
 pending_alert_timers = {}
 pending_alert_protocols = {}
-pending_alert_lock = threading.Lock()
+# One lock for the whole contact lifecycle, not just the timer dictionaries.
+#
+# Capture runs on two threads (BLE and Wi-Fi) and finalisation runs on a third, and
+# they all mutate the same maps. Only the timer dicts were guarded, so a re-key could
+# interleave with a finalisation or with the other transport's merge — several
+# dictionary operations that must happen together, on data another thread was already
+# reading. The GIL makes each operation atomic and does nothing for a sequence of them.
+#
+# Reentrant because finalisation calls into the alert path, which touches the same
+# state; a plain Lock would deadlock the moment it did.
+contact_lock = threading.RLock()
+
+# Per-stage pipeline counters, so "is this receiver working" can be answered locally
+# and without the cloud.
+#
+# The heartbeat proves the process is alive and the radios are configured. It cannot
+# distinguish a receiver hearing nothing because the sky is empty from one whose
+# capture socket stopped forwarding frames hours ago — both look like silence. Counting
+# each stage separates them: frames arriving but nothing decoding is a decoder problem,
+# nothing arriving at all is a radio problem.
+pipeline_counters = {
+    "frames_seen": {},          # protocol -> frames handed to a decoder
+    "messages_decoded": {},     # protocol -> Remote ID messages successfully decoded
+    "contacts_recorded": 0,     # consolidated detections written
+    "enqueue_failures": 0,      # detections that could not be queued for upload
+    "last_frame_at": {},        # protocol -> ISO time a frame last arrived
+}
+
+
+def count_frame(protocol, decoded=False):
+    """One frame reached a decoder, and whether it yielded anything."""
+    with contact_lock:
+        pipeline_counters["frames_seen"][protocol] = \
+            pipeline_counters["frames_seen"].get(protocol, 0) + 1
+        pipeline_counters["last_frame_at"][protocol] = \
+            datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        if decoded:
+            pipeline_counters["messages_decoded"][protocol] = \
+                pipeline_counters["messages_decoded"].get(protocol, 0) + 1
 
 # A drone's Wi-Fi MAC differs from its BLE MAC, so the same aircraft picked up on
 # both transports would otherwise be logged twice as two unrelated contacts. Once a
@@ -524,12 +769,32 @@ key_to_msg_count = {}
 # about the receiver.
 key_to_rssi = {}
 
+# When each contact was first and last actually heard, as epoch seconds.
+#
+# detected_at used to be created when the alert fired, up to the full grace period
+# after the frame arrived — so a detection could be stamped ten seconds late, and a
+# contact could cross a minute or hour boundary it never crossed in the air. Tolerable
+# for a chime, wrong for anything comparing receivers, grouping passes, or measuring
+# closest approach.
+key_to_first_seen = {}
+key_to_last_seen = {}
+
 def resolve_state_key(transport_mac):
     return transport_mac_to_key.get(transport_mac, transport_mac)
 
 def merge_state(transport_mac, decoded):
     """Merges newly decoded fields into this drone's accumulated state, re-keying
-    from transport MAC to UAS ID the first time we learn it. Returns the key."""
+    from transport MAC to UAS ID the first time we learn it. Returns the key.
+
+    Runs under contact_lock: the re-key moves state, transports, counts, signal and
+    timing between two keys, and another thread reading halfway through would see a
+    contact that exists under neither.
+    """
+    with contact_lock:
+        return _merge_state_locked(transport_mac, decoded)
+
+
+def _merge_state_locked(transport_mac, decoded):
     key = resolve_state_key(transport_mac)
     state = drone_state.setdefault(key, {})
     state.update(decoded)
@@ -544,6 +809,16 @@ def merge_state(transport_mac, decoded):
         target.update(merged)
         key_to_macs.setdefault(uas_id, set()).update(key_to_macs.pop(key, set()))
         key_to_msg_count[uas_id] = key_to_msg_count.get(uas_id, 0) + key_to_msg_count.pop(key, 0)
+        # Earliest first-seen and latest last-seen survive the re-key: the contact is
+        # the same aircraft, so its span must not restart because we learned its name.
+        first = key_to_first_seen.pop(key, None)
+        if first is not None:
+            prior = key_to_first_seen.get(uas_id)
+            key_to_first_seen[uas_id] = first if prior is None else min(prior, first)
+        last = key_to_last_seen.pop(key, None)
+        if last is not None:
+            prior = key_to_last_seen.get(uas_id)
+            key_to_last_seen[uas_id] = last if prior is None else max(prior, last)
         carried = key_to_rssi.pop(key, None)
         if carried is not None:
             existing = key_to_rssi.get(uas_id)
@@ -561,7 +836,7 @@ def merge_state(transport_mac, decoded):
         # schedules a fresh one against the canonical key. That restarts the grace
         # period, which is the right behaviour anyway: the Basic ID that triggered the
         # re-key is new evidence worth waiting a moment on.
-        with pending_alert_lock:
+        with contact_lock:
             pending_alert_protocols.setdefault(uas_id, set()).update(
                 pending_alert_protocols.pop(key, set()))
             stale = pending_alert_timers.pop(key, None)
@@ -571,10 +846,13 @@ def merge_state(transport_mac, decoded):
     return key
 
 def finalize_pending_alert(key):
-    with pending_alert_lock:
+    # Held across the read of drone_state too: releasing between popping the timer and
+    # reading the state let a capture thread re-key the contact in the gap, so
+    # finalisation found nothing and the detection was lost.
+    with contact_lock:
         pending_alert_timers.pop(key, None)
         protocols = pending_alert_protocols.pop(key, set())
-    state = drone_state.get(key)
+        state = drone_state.get(key)
     if not state:
         return
 
@@ -622,11 +900,15 @@ def register_detection(transport_mac, decoded, protocol, message_count=1, rssi_d
         # just because the first packet we saw was an undecoded type.
         return
 
-    key = merge_state(transport_mac, decoded)
-    key_to_msg_count[key] = key_to_msg_count.get(key, 0) + message_count
-    if rssi_dbm is not None:
-        previous = key_to_rssi.get(key)
-        key_to_rssi[key] = rssi_dbm if previous is None else max(previous, rssi_dbm)
+    received_at = time.time()
+    with contact_lock:
+        key = merge_state(transport_mac, decoded)
+        key_to_first_seen.setdefault(key, received_at)
+        key_to_last_seen[key] = received_at
+        key_to_msg_count[key] = key_to_msg_count.get(key, 0) + message_count
+        if rssi_dbm is not None:
+            previous = key_to_rssi.get(key)
+            key_to_rssi[key] = rssi_dbm if previous is None else max(previous, rssi_dbm)
 
     # Drop this key's cooldown entry once it has served its time. Testing presence
     # alone meant an expired entry suppressed the aircraft indefinitely: the only code
@@ -638,7 +920,7 @@ def register_detection(transport_mac, decoded, protocol, message_count=1, rssi_d
     if sent_at is not None and time.time() - sent_at >= ALERT_COOLDOWN:
         sent_alert_tracker.pop(key, None)
 
-    with pending_alert_lock:
+    with contact_lock:
         # Record every transport that contributed, even when a timer is already
         # pending — a drone heard on both BLE and Wi-Fi should say so.
         pending_alert_protocols.setdefault(key, set()).add(protocol)
@@ -678,6 +960,7 @@ def check_packet_for_remote_id(packet_str):
     for address, adv_data, rssi_dbm in reports:
         msg = extract_odid_message(adv_data)
         if msg:
+            count_frame("BLE", decoded=True)
             register_detection(address or "BLE-REMOTE-ID-UNIT", decode_message(msg),
                                "BLE", 1, rssi_dbm=rssi_dbm)
 
@@ -713,7 +996,7 @@ def hci_command(ocf_bytes, description, warn=True):
     warn=False for commands whose failure is expected and harmless, so a routine
     no-op doesn't read like a hardware fault in the log."""
     try:
-        out = subprocess.run(["sudo", "hcitool", "-i", BLE_INTERFACE, "cmd", "0x08"] + ocf_bytes,
+        out = subprocess.run(privileged(["hcitool", "-i", BLE_INTERFACE, "cmd", "0x08"] + ocf_bytes),
                              capture_output=True, text=True, timeout=10).stdout
         status = command_complete_status(out, ocf_bytes[0])
         ok = status == "00"
@@ -755,7 +1038,15 @@ def start_ble_scanning():
     # subsequent start in legacy forever. Killing the process is deliberately how
     # that's cleared rather than a raw legacy-disable HCI command, which was observed
     # to wedge this adapter badly enough that it re-enumerated.
-    os.system("sudo killall hcitool > /dev/null 2>&1")
+    stop_stray_scanners()
+    # Killing the process is not enough: legacy scanning is controller state and
+    # survives whatever started it, which is why a single fallback used to trap every
+    # later start in legacy forever. HCI_Reset clears it. Deliberately a reset rather
+    # than a raw LE Set Scan Enable disable, which was observed to wedge this adapter
+    # badly enough that it re-enumerated as a different hciN.
+    subprocess.run(privileged(["hciconfig", BLE_INTERFACE, "reset"]),
+                   capture_output=True, timeout=15)
+    time.sleep(1)
     hci_command(["0x0042", "00", "00", "00", "00", "00", "00"],
                 "extended scan disable", warn=False)
     # LE Set Extended Scan Parameters: own_addr=public, no filter policy,
@@ -773,7 +1064,8 @@ def start_ble_scanning():
         return
     radio_state["ble_mode"] = "legacy"
     print("📡 BLE: falling back to legacy scanning (no Bluetooth 5 Long Range coverage)")
-    os.system(f"sudo hcitool -i {BLE_INTERFACE} lescan --duplicates --passive > /dev/null 2>&1 &")
+    subprocess.Popen(privileged(["hcitool", "-i", BLE_INTERFACE, "lescan", "--duplicates", "--passive"]),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def stop_ble_scanning():
     hci_command(["0x0042", "00", "00", "00", "00", "00", "00"], "extended scan disable")
@@ -782,13 +1074,13 @@ def parse_ble_remote_id():
     """Forces hci0 into a permanent, unbroken streaming mode to catch fast-moving targets."""
     # bluetoothd is masked (it fights hcitool over scan parameters), which also means
     # nothing else brings the adapter up after boot — do it ourselves before scanning.
-    os.system(f"sudo hciconfig {BLE_INTERFACE} up > /dev/null 2>&1")
+    subprocess.run(privileged(["hciconfig", BLE_INTERFACE, "up"]), capture_output=True, timeout=15)
     time.sleep(1.0)
 
     start_ble_scanning()
 
     # Launch a continuous system stream pipe task
-    cmd = ["sudo", "hcidump", "-i", BLE_INTERFACE, "-R"]
+    cmd = privileged(["hcidump", "-i", BLE_INTERFACE, "-R"])
     try:
         # HARDWARE WARM-UP CUSHION: Gives the StarTech USB adapter ample time to bind before stream capture
         time.sleep(2.0)  
@@ -832,7 +1124,7 @@ def parse_ble_remote_id():
         # Extended scanning is controller state, not a process — killing hcidump
         # doesn't stop it, so turn it off explicitly.
         stop_ble_scanning()
-        os.system("sudo killall hcidump hcitool > /dev/null 2>&1")
+        stop_stray_scanners()
 
 def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_source="decoded",
                   message_count=0, rssi_dbm=None):
@@ -851,7 +1143,13 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
     dedup_key = dedup_key or icao_hex
     # UTC ISO format matches the DroneSight cloud timestamps so the dashboard can
     # convert both consistently to the viewer's local time.
-    timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    # When the first frame of this contact arrived, not when the grace period expired.
+    # Falls back to now only if nothing recorded a receive time, which would mean this
+    # was reached outside the normal capture path.
+    heard_at = key_to_first_seen.get(dedup_key)
+    stamped = (datetime.fromtimestamp(heard_at, timezone.utc) if heard_at
+               else datetime.now(timezone.utc))
+    timestamp = stamped.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
     current_time = time.time()
     if dedup_key in sent_alert_tracker:
@@ -864,6 +1162,8 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
         drone_state.pop(tracked_key, None)
         key_to_msg_count.pop(tracked_key, None)
         key_to_rssi.pop(tracked_key, None)
+        key_to_first_seen.pop(tracked_key, None)
+        key_to_last_seen.pop(tracked_key, None)
         for mac in key_to_macs.pop(tracked_key, set()):
             transport_mac_to_key.pop(mac, None)
 
@@ -902,6 +1202,8 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
         last_audio_time = time.time()
         play_audio_alert()
 
+    with contact_lock:
+        pipeline_counters["contacts_recorded"] += 1
     sent_alert_tracker[dedup_key] = current_time
     for single in protocol.split("+"):
         radio_state["last_detection_at"][single.strip()] = timestamp
@@ -909,12 +1211,15 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
 def wifi_capture_loop():
     """Wi-Fi Remote ID capture, in its own thread. Restarts on error rather than
     dying silently — a Wi-Fi problem must never take down BLE capture."""
+    def on_detection(mac, telemetry, protocol, count, rssi):
+        count_frame(protocol, decoded=bool(telemetry))
+        register_detection(mac, telemetry, protocol, count, rssi_dbm=rssi)
+
     while True:
         try:
             wifi_remote_id.capture(
                 WIFI_INTERFACE,
-                lambda mac, telemetry, protocol, count, rssi: register_detection(
-                    mac, telemetry, protocol, count, rssi_dbm=rssi),
+                on_detection,
                 channels=WIFI_CHANNELS,
             )
         except Exception as e:
@@ -929,6 +1234,42 @@ def wifi_capture_loop():
 # twice while working on this file, the second time taking the running service down
 # with it. The decoders are worth importing on their own; starting the radios is what
 # should require actually running this.
+
+def stop_stray_scanners():
+    """Stops hcitool/hcidump processes that are scanning *our* adapter.
+
+    Previously a blanket `killall hcidump hcitool`, which reaches every process on the
+    host — including another receiver, a packet capture someone is running, or a second
+    copy of this project on a different adapter. Matched on the interface instead, so
+    this only ever stops work that would contend with the radio we are about to
+    configure.
+    """
+    try:
+        listing = subprocess.run(["ps", "-eo", "pid,args"], capture_output=True,
+                                 text=True, timeout=10).stdout
+    except Exception as e:
+        print(f"⚠️ Could not inspect running processes: {e}")
+        return
+    own = str(os.getpid())
+    for line in listing.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid, command = parts
+        if pid == own or not any(tool in command for tool in ("hcitool", "hcidump")):
+            continue
+        # Only processes bound to this adapter. A tool invoked without -i defaults to
+        # the first adapter, which is ours on a single-adapter host.
+        targeted = f"-i {BLE_INTERFACE}" in command or "-i " not in command
+        if not targeted:
+            continue
+        try:
+            subprocess.run(["kill", pid], capture_output=True, timeout=5)
+            print(f"🧹 Stopped stray scanner on {BLE_INTERFACE}: pid {pid}")
+        except Exception:
+            pass
+
+
 def ble_capture_loop():
     """Keeps BLE capture running across adapter disappearances.
 
@@ -958,7 +1299,7 @@ def main():
     radio_state["started_at"] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
     threading.Thread(target=central_sync_loop, daemon=True).start()
-    threading.Thread(target=heartbeat_loop, args=(load_or_create_credentials(),),
+    threading.Thread(target=heartbeat_loop, args=(get_credentials(),),
                      daemon=True).start()
 
     if WIFI_INTERFACE:
@@ -972,7 +1313,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[!] Shutting down drone monitoring loop cleanly.")
         stop_ble_scanning()
-        os.system("sudo killall hcidump hcitool > /dev/null 2>&1")
+        stop_stray_scanners()
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ Run directly — no test framework required:
 import os
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -145,12 +146,53 @@ def test_both_transports_are_credited():
     return ok
 
 
+def test_concurrent_transports_do_not_corrupt_state():
+    """Two capture threads hammering the same aircraft must not lose or duplicate it.
+
+    BLE and Wi-Fi run on separate threads and mutate the same maps, and the re-key from
+    transport MAC to UAS ID is several dictionary operations that have to happen
+    together. Interleaving them used to be possible: the GIL makes each operation
+    atomic and does nothing for a sequence of them.
+    """
+    print("concurrent transports")
+    written = isolate()
+    rt.PENDING_ALERT_GRACE_SECONDS = 0.6
+    errors = []
+
+    def hammer(mac, protocol, extra):
+        try:
+            for _ in range(40):
+                rt.register_detection(mac, dict(extra), protocol, 1, -70)
+                rt.register_detection(mac, {"uas_id": "RID-CONC"}, protocol, 1, -70)
+        except Exception as exc:              # a race would surface as KeyError here
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=hammer, args=("11:11:11:11:11:11", "BLE", {"lat": 1.0})),
+        threading.Thread(target=hammer, args=("22:22:22:22:22:22", "Wi-Fi", {"lon": 2.0})),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    time.sleep(1.2)
+
+    ok = check("no exception escaped a capture thread", not errors, str(errors[:1]))
+    ok &= check("the contact was recorded", len(written) >= 1, f"{len(written)} written")
+    ok &= check("state converged on one key", list(rt.drone_state) in ([], ["RID-CONC"]),
+                str(list(rt.drone_state)))
+    ok &= check("no timers left behind", not rt.pending_alert_timers,
+                str(list(rt.pending_alert_timers)))
+    return ok
+
+
 if __name__ == "__main__":
     results = [
         test_rekey_during_grace_period(),
         test_expired_cooldown_does_not_suppress(),
         test_cooldown_still_suppresses_while_live(),
         test_both_transports_are_credited(),
+        test_concurrent_transports_do_not_corrupt_state(),
     ]
     print(f"\n{sum(results)}/{len(results)} passed")
     sys.exit(0 if all(results) else 1)

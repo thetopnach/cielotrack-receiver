@@ -15,5 +15,29 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
+# --- hardening ---
+# This runs as root because raw HCI and monitor mode need CAP_NET_RAW and
+# CAP_NET_ADMIN, and the helpers it drives (hciconfig, hcitool, hcidump, iw) are not
+# capability-aware. What follows bounds what root can reach, so a fault in a frame
+# parser cannot become a fault in the rest of the machine.
+#
+# If you install outside /opt, update ReadWritePaths. Installing under a home directory
+# additionally needs CAP_DAC_READ_SEARCH in the bounding set, because root cannot
+# traverse an owner-only home once that capability is dropped.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_KILL
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/opt/cielotrack-receiver
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# AF_BLUETOOTH for HCI, AF_PACKET for monitor-mode capture, AF_NETLINK for iw.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET AF_BLUETOOTH
+
 [Install]
 WantedBy=multi-user.target
