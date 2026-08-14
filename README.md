@@ -34,7 +34,23 @@ sudo cp .env.example .env
 ```
 
 Edit `.env` and set `BASE_LAT` / `BASE_LON` to where the receiver sits, and
-`WIFI_INTERFACE` to your monitor-capable adapter. Then:
+`WIFI_INTERFACE` to your monitor-capable adapter.
+
+Then provision the host state the receiver needs but cannot create for itself —
+monitor mode, protection from NetworkManager reclaiming the adapter, re-application
+when it is replugged, and masking `bluetoothd` so it stops competing for the Bluetooth
+controller:
+
+```bash
+sudo ./provision.sh            # lists your candidate adapters
+sudo ./provision.sh wlan1      # provisions that one
+```
+
+Everything it writes is derived from the adapter you name, so no file needs
+hand-editing. It is safe to run again after changing hardware.
+
+Skipping this step leaves Wi-Fi capture unable to work at all: the receiver retunes the
+channel, it does not create monitor mode. Then:
 
 ```bash
 sudo cp cielotrack-receiver.service /etc/systemd/system/
