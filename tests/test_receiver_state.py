@@ -70,7 +70,7 @@ def test_rekey_during_grace_period():
     rt.PENDING_ALERT_GRACE_SECONDS = 0.4
     mac = "AA:BB:CC:DD:EE:FF"
 
-    rt.register_detection(mac, {"lat": 32.99, "lon": -96.67}, "BLE", 1, -80)
+    rt.register_detection(mac, {"lat": 10.0, "lon": 20.0}, "BLE", 1, -80)
     rt.register_detection(mac, {"uas_id": "RID-123"}, "BLE", 1, -80)
     time.sleep(0.9)
 
@@ -80,7 +80,7 @@ def test_rekey_during_grace_period():
 
     # The real damage was here: a stranded timer suppressed the aircraft permanently.
     rt.sent_alert_tracker.clear()
-    rt.register_detection(mac, {"lat": 33.0, "lon": -96.6}, "BLE", 1, -80)
+    rt.register_detection(mac, {"lat": 10.1, "lon": 20.1}, "BLE", 1, -80)
     time.sleep(0.9)
     ok &= check("a later pass is still recorded", len(written) == 2, f"{len(written)} written")
     return ok
