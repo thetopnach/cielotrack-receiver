@@ -549,15 +549,24 @@ def merge_state(transport_mac, decoded):
             existing = key_to_rssi.get(uas_id)
             key_to_rssi[uas_id] = carried if existing is None else max(existing, carried)
         transport_mac_to_key[transport_mac] = uas_id
-        # Carry a pending timer across so re-keying doesn't strand or duplicate it,
-        # always folding the old key's contributing transports into the new key.
+        # A live timer is never carried across a re-key. It was constructed with the
+        # old key baked into its callback arguments, so moving the object left it
+        # firing finalize_pending_alert() on a key whose state had just been popped:
+        # the detection was silently dropped, and because the dead timer stayed
+        # registered under the new key, every later packet from that aircraft saw
+        # "already pending" and returned. One aircraft could be suppressed for the
+        # life of the process.
+        #
+        # Cancelled instead, and left absent from pending_alert_timers so the caller
+        # schedules a fresh one against the canonical key. That restarts the grace
+        # period, which is the right behaviour anyway: the Basic ID that triggered the
+        # re-key is new evidence worth waiting a moment on.
         with pending_alert_lock:
             pending_alert_protocols.setdefault(uas_id, set()).update(
                 pending_alert_protocols.pop(key, set()))
-            if key in pending_alert_timers and uas_id not in pending_alert_timers:
-                pending_alert_timers[uas_id] = pending_alert_timers.pop(key)
-            elif key in pending_alert_timers:
-                pending_alert_timers.pop(key).cancel()
+            stale = pending_alert_timers.pop(key, None)
+            if stale is not None:
+                stale.cancel()
         return uas_id
     return key
 
@@ -618,6 +627,16 @@ def register_detection(transport_mac, decoded, protocol, message_count=1, rssi_d
     if rssi_dbm is not None:
         previous = key_to_rssi.get(key)
         key_to_rssi[key] = rssi_dbm if previous is None else max(previous, rssi_dbm)
+
+    # Drop this key's cooldown entry once it has served its time. Testing presence
+    # alone meant an expired entry suppressed the aircraft indefinitely: the only code
+    # that expired entries lived in log_and_alert, which a suppressed key can never
+    # reach, because being suppressed is exactly what stops a timer being scheduled.
+    # On a quiet receiver seeing one aircraft repeatedly, the two-minute cooldown
+    # became permanent.
+    sent_at = sent_alert_tracker.get(key)
+    if sent_at is not None and time.time() - sent_at >= ALERT_COOLDOWN:
+        sent_alert_tracker.pop(key, None)
 
     with pending_alert_lock:
         # Record every transport that contributed, even when a timer is already
