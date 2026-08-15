@@ -327,6 +327,8 @@ def enqueue_detection(icao_hex, protocol, telemetry, detected_at, identity_sourc
         "identity_source": identity_source,
         "message_count": message_count,
         "altitude_ref": telemetry.get("altitude_ref", "N/A"),
+        "height_m": telemetry.get("height_m"),
+        "height_ref": telemetry.get("height_ref", "N/A"),
         "operator_location_type": telemetry.get("operator_location_type", "N/A"),
         "rssi_dbm": rssi_dbm,
     }
@@ -494,12 +496,29 @@ def collect_radio_status():
     except Exception:
         pending = None
 
+    # Writes that failed since the last heartbeat. These are the faults a healthy-looking
+    # receiver hides: capture, decoding and the heartbeat itself all keep working while
+    # every detection fails to reach the queue, so nothing else here goes red. `problems`
+    # stays empty, the radios really are fine, and outbox_pending reads 0 precisely
+    # *because* nothing could be enqueued — three green signals for a receiver uploading
+    # nothing. A counter that only moves when a write actually fails has no such blind
+    # spot, and cannot be confused with a quiet sky.
+    with contact_lock:
+        failures = {name: pipeline_counters[name] for name in reported_failures}
+    for name, code in (("enqueue_failures", "detections_not_queued"),
+                       ("status_write_failures", "status_file_unwritable")):
+        if failures[name] > reported_failures[name]:
+            problems.append(code)
+        reported_failures[name] = failures[name]
+
     return {
         "started_at": radio_state["started_at"],
         "ble": {"mode": radio_state["ble_mode"], "stream_alive": ble_alive},
         "wifi": wifi,
         "last_detection_at": dict(radio_state["last_detection_at"]),
         "outbox_pending": pending,
+        "enqueue_failures": failures["enqueue_failures"],
+        "status_write_failures": failures["status_write_failures"],
         "position": configured_position(),
         "problems": problems,
     }
@@ -539,6 +558,8 @@ def write_status_file(radio_status):
             json.dump(payload, handle, indent=2)
         os.replace(temporary, STATUS_FILE)
     except Exception as e:
+        with contact_lock:
+            pipeline_counters["status_write_failures"] += 1
         print(f"⚠️ Could not write {STATUS_FILE}: {type(e).__name__}: {e}")
 
 
@@ -732,8 +753,15 @@ pipeline_counters = {
     "messages_decoded": {},     # protocol -> Remote ID messages successfully decoded
     "contacts_recorded": 0,     # consolidated detections written
     "enqueue_failures": 0,      # detections that could not be queued for upload
+    "status_write_failures": 0, # heartbeats whose local status file could not be written
     "last_frame_at": {},        # protocol -> ISO time a frame last arrived
 }
+
+# What the previous heartbeat had already reported, so a fault is raised for failures
+# happening *now* rather than for any failure ever seen. Without this a single lock
+# contention would latch a fault until the process restarted, and an operator who
+# learns to ignore a stuck warning is worse off than one with no warning at all.
+reported_failures = {"enqueue_failures": 0, "status_write_failures": 0}
 
 
 def count_frame(protocol, decoded=False):
@@ -1179,6 +1207,8 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
     altitude_ref = telemetry.get("altitude_ref", "N/A")
     operator_location_type = telemetry.get("operator_location_type", "N/A")
     rssi = "N/A" if rssi_dbm is None else rssi_dbm
+    height_m = telemetry.get("height_m", "N/A")
+    height_ref = telemetry.get("height_ref", "N/A")
 
     with open(LOG_FILE, mode='a', newline='') as f:
         writer = csv.writer(f)
@@ -1186,7 +1216,8 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
         # position, so a new column has to land on the end.
         writer.writerow([timestamp, icao_hex, protocol, uas_id, ua_type, lat, lon, altitude_m, speed_mps,
                           operator_lat, operator_lon, operator_altitude_m, identity_source,
-                          message_count, altitude_ref, operator_location_type, rssi])
+                          message_count, altitude_ref, operator_location_type, rssi,
+                          height_m, height_ref])
 
     # Queued locally regardless of central server reachability/claim status — the
     # background sync thread drains this whenever it can, see central_sync_loop().

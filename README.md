@@ -84,10 +84,19 @@ to diagnose.
 cat /opt/cielotrack-receiver/status.json
 ```
 
-`radios.problems` is empty when both radios are configured as intended.
-`pipeline.frames_seen` versus `pipeline.messages_decoded` separates the two silences a
-heartbeat cannot tell apart: frames arriving but nothing decoding is a decoder problem,
-nothing arriving at all is a radio problem.
+`radios.problems` is empty when both radios are configured as intended, and names any
+fault the receiver can see in itself — including `detections_not_queued`, which means
+aircraft are being heard but cannot be written to the upload queue.
+
+`pipeline.contacts_recorded` counts detections this process has recorded, and
+`pipeline.enqueue_failures` counts those it could not queue. Both are cumulative since
+start, so a rising failure count next to a static recorded count is a receiver that is
+hearing everything and delivering nothing.
+
+`pipeline.frames_seen` counts frames that reached a decoder, but note that today it is
+only incremented once a Remote ID message has already been extracted, so it stays at
+zero over an empty sky and cannot by itself tell you a radio has died. Use
+`radios.problems` and the heartbeat for that.
 
 ## Tests
 

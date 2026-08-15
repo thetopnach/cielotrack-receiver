@@ -51,6 +51,9 @@ def decode_location(msg):
     byte1 = msg[1]
     speed_mult = byte1 & 0x01
     ew_direction = (byte1 >> 1) & 0x01
+    # Height Type: 0 = above takeoff, 1 = above ground. Reported rather than assumed,
+    # because the two differ by the whole climb of a launch from a rooftop or a hill.
+    height_type = (byte1 >> 2) & 0x01
     direction_enc = msg[2]
     speed_h_enc = msg[3]
     speed_v_enc = struct.unpack('b', msg[4:5])[0]
@@ -81,11 +84,22 @@ def decode_location(msg):
     elif alt_geo_enc or alt_baro_enc:
         altitude_m = (alt_geo_enc or alt_baro_enc) * 0.5 - 1000
         altitude_ref = "absolute"
+
+    # Height and absolute altitude are two different measurements broadcast together,
+    # not two ways of saying one thing, so reporting height separately stops the pair
+    # above from having to choose between them. altitude_m keeps its existing meaning —
+    # consumers already branch on altitude_ref — and height_m simply stops the other
+    # number being thrown away. A drone at 47.5 m over a field 172 m above sea level
+    # broadcasts both 47.5 and 219.5, and each answers a different question.
+    height_m = round(height_enc * 0.5 - 1000, 1) if height_enc else None
+
     return {
         "lat": round(lat, 7),
         "lon": round(lon, 7),
         "altitude_m": round(altitude_m, 1) if altitude_m is not None else "N/A",
         "altitude_ref": altitude_ref,
+        "height_m": height_m if height_m is not None else "N/A",
+        "height_ref": ("ground" if height_type else "takeoff") if height_enc else "N/A",
         "speed_mps": round(speed_mps, 1),
         "vspeed_mps": round(speed_v_enc * 0.5, 1),
         "direction_deg": direction_enc + (180 if ew_direction else 0),

@@ -186,6 +186,66 @@ def test_concurrent_transports_do_not_corrupt_state():
     return ok
 
 
+def test_write_failures_are_reported_then_clear():
+    """A receiver that cannot write must say so, once, for as long as it is failing.
+
+    This is the failure that hid a 17-hour outage on 2026-08-15: capture, decoding and
+    the heartbeat all kept working while every detection failed to reach the outbox, so
+    every other signal stayed green — including outbox_pending, which read 0 precisely
+    because nothing could be enqueued. Only a counter that moves when a write fails can
+    see it, and it has to stop reporting once the writes succeed again, or the warning
+    becomes background noise an operator learns to scroll past.
+    """
+    print("\ntest_write_failures_are_reported_then_clear")
+    # Only the failure logic is under test; the radio probes shell out to iw and hcitool.
+    rt.pipeline_counters["enqueue_failures"] = 0
+    rt.pipeline_counters["status_write_failures"] = 0
+    rt.reported_failures.update(enqueue_failures=0, status_write_failures=0)
+    original_position = rt.configured_position
+    rt.configured_position = lambda: None
+    rt.radio_state["ble_stream"] = None
+    rt.radio_state["ble_mode"] = "extended"
+    original_wifi = rt.WIFI_INTERFACE
+    rt.WIFI_INTERFACE = None
+
+    def problems():
+        return rt.collect_radio_status()["problems"]
+
+    try:
+        quiet = problems()
+        ok = check("a healthy receiver reports no write faults",
+                   "detections_not_queued" not in quiet, str(quiet))
+
+        rt.pipeline_counters["enqueue_failures"] = 3
+        first = problems()
+        ok &= check("a failing enqueue is reported",
+                    "detections_not_queued" in first, str(first))
+
+        rt.pipeline_counters["enqueue_failures"] = 9
+        during = problems()
+        ok &= check("it keeps being reported while it keeps failing",
+                    "detections_not_queued" in during, str(during))
+
+        recovered = problems()
+        ok &= check("it clears once writes succeed again",
+                    "detections_not_queued" not in recovered, str(recovered))
+
+        rt.pipeline_counters["status_write_failures"] = 1
+        status_fault = rt.collect_radio_status()
+        ok &= check("an unwritable status file is its own fault",
+                    "status_file_unwritable" in status_fault["problems"],
+                    str(status_fault["problems"]))
+        ok &= check("the counts travel with the heartbeat",
+                    status_fault.get("enqueue_failures") == 9
+                    and status_fault.get("status_write_failures") == 1,
+                    f"{status_fault.get('enqueue_failures')}, "
+                    f"{status_fault.get('status_write_failures')}")
+        return ok
+    finally:
+        rt.configured_position = original_position
+        rt.WIFI_INTERFACE = original_wifi
+
+
 if __name__ == "__main__":
     results = [
         test_rekey_during_grace_period(),
@@ -193,6 +253,7 @@ if __name__ == "__main__":
         test_cooldown_still_suppresses_while_live(),
         test_both_transports_are_credited(),
         test_concurrent_transports_do_not_corrupt_state(),
+        test_write_failures_are_reported_then_clear(),
     ]
     print(f"\n{sum(results)}/{len(results)} passed")
     sys.exit(0 if all(results) else 1)

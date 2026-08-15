@@ -21,9 +21,19 @@ StandardError=journal
 # capability-aware. What follows bounds what root can reach, so a fault in a frame
 # parser cannot become a fault in the rest of the machine.
 #
-# If you install outside /opt, update ReadWritePaths. Installing under a home directory
-# additionally needs CAP_DAC_READ_SEARCH in the bounding set, because root cannot
-# traverse an owner-only home once that capability is dropped.
+# If you install outside /opt, update ReadWritePaths. An /opt install owned by root
+# needs nothing else. Installing under a home directory needs three more changes, and
+# getting two of them wrong fails in ways that do not look like permissions at all:
+#
+#   - drop ProtectHome=yes, or the install directory is not visible to the service;
+#   - add CAP_DAC_READ_SEARCH, or root cannot traverse into an owner-only home;
+#   - add CAP_DAC_OVERRIDE, or root cannot *create* files in a directory it does not
+#     own. This is the one that bites. Capture, decoding and alerting all keep working;
+#     what breaks is every write that makes a new file — SQLite in WAL mode creating
+#     outbox.db-wal, and the status file's status.json.tmp. Detections then fail to
+#     queue with "attempt to write a readonly database" while the heartbeat stays
+#     green and radios.problems stays empty. We lost 17 hours of uploads to exactly
+#     this before writing it down.
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_KILL
 ProtectSystem=full
