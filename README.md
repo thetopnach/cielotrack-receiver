@@ -46,6 +46,9 @@ sudo ./provision.sh            # lists your candidate adapters
 sudo ./provision.sh wlan1      # provisions that one
 ```
 
+This also pins the release signing key and enables the nightly updater described under
+[Updates](#updates).
+
 Everything it writes is derived from the adapter you name, so no file needs
 hand-editing. It is safe to run again after changing hardware.
 
@@ -98,11 +101,60 @@ only incremented once a Remote ID message has already been extracted, so it stay
 zero over an empty sky and cannot by itself tell you a radio has died. Use
 `radios.problems` and the heartbeat for that.
 
+## Updates
+
+The receiver updates itself overnight, and you should know exactly what that means
+before you leave it running.
+
+Once a night, at a random time between 02:00 and 04:00 **local** to the receiver, it
+checks for a new release. The window is when the sky is empty — Remote ID traffic here
+drops to nothing between roughly 23:00 and 06:00 — so an update that goes wrong costs
+the least data it can. The time is randomised so that a bad release cannot take every
+receiver down in the same instant; the early updaters roll themselves back before the
+later ones start.
+
+It will only move to a **signed release tag**, never to whatever is on `main`, and it
+verifies that signature against a key pinned to `/etc/cielotrack/allowed_signers` when
+you installed — not against the key in the repository it is about to install, which
+would prove nothing.
+
+Afterwards it checks the receiver still works, using the same faults the fleet page
+shows. If detections stop reaching the queue, or the status file cannot be written, it
+puts the previous release **and the previous service unit** back and restarts. The unit
+matters: it lives in `/etc`, so a plain `git pull` never updates it, and fixes to the
+sandboxing or capabilities would otherwise silently never reach anyone already running.
+
+```bash
+sudo ./update.sh --check              # what tonight's run would do, changing nothing
+systemctl list-timers cielotrack-update
+journalctl -u cielotrack-update       # what it did, and any rollback
+```
+
+To turn it off:
+
+```bash
+sudo touch /etc/cielotrack/no-auto-update
+```
+
+A checkout with local modifications is never touched — if you are mid-debug, the
+updater leaves you alone and says so.
+
+Worth being plain about the trade: this runs as root and installs code fetched from
+the internet. Signing and pinning mean a compromised mirror cannot feed you a release,
+but they do not protect against the signing key itself being stolen. If that is not a
+trade you want on your hardware, disable it and update by hand — the project works
+exactly the same either way.
+
 ## Tests
 
 ```bash
 python3 tests/test_receiver_state.py
+sudo -v && bash tests/test_update.sh
 ```
+
+The second one signs throwaway release tags with your SSH key against a throwaway
+repository, so it also proves the signing path works on your machine before you cut a
+real release. It cleans up after itself.
 
 No framework needed. They cover the contact state machine — where the receiver decides
 whether a drone that was heard becomes a drone that was recorded.

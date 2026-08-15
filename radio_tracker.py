@@ -128,6 +128,29 @@ OUTBOX_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outbox.db"
 SYNC_INTERVAL = 15
 # Matches the server's expectation; it treats three missed intervals as offline.
 HEARTBEAT_INTERVAL = 60
+
+
+def installed_version():
+    """Which build this is, for the heartbeat.
+
+    Read from git rather than a constant in the source, because a constant is exactly
+    the thing that gets forgotten in the commit that matters. Falls back quietly: an
+    install from a tarball with no .git is unusual but not broken, and a receiver must
+    never fail to start over not knowing its own version number.
+    """
+    directory = os.path.dirname(os.path.abspath(__file__))
+    try:
+        described = subprocess.run(
+            ["git", "-C", directory, "describe", "--tags", "--always", "--dirty"],
+            capture_output=True, text=True, timeout=5)
+        if described.returncode == 0 and described.stdout.strip():
+            return described.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+VERSION = installed_version()
 HEARTBEAT_RETRY_INTERVAL = 10
 HEARTBEAT_WARMUP_SECONDS = 20
 # Matches the Wi-Fi path's retry cadence.
@@ -513,6 +536,7 @@ def collect_radio_status():
 
     return {
         "started_at": radio_state["started_at"],
+        "version": VERSION,
         "ble": {"mode": radio_state["ble_mode"], "stream_alive": ble_alive},
         "wifi": wifi,
         "last_detection_at": dict(radio_state["last_detection_at"]),

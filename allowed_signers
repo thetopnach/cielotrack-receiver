@@ -1,0 +1,13 @@
+# Keys trusted to sign CieloTrack receiver releases, in ssh allowed_signers format.
+#
+# provision.sh copies this to /etc/cielotrack/allowed_signers at install time, and the
+# updater verifies release tags against that pinned copy — never against this file.
+# The distinction is the whole point: if the updater trusted the copy inside the
+# repository it is about to install, anyone able to push a tag could also push the key
+# that vouches for it, and the signature would prove nothing.
+#
+# Pinning at install time means trust is decided once, when a person chose to clone
+# this repository, rather than silently re-decided every night. Rotating a key is
+# therefore a deliberate act: it needs updating /etc/cielotrack/allowed_signers on each
+# receiver, which is inconvenient exactly in proportion to how serious it is.
+drone@station.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILJ8q7X0yL4tKfIVVex1fBfDEhzWCeNH8drgOWdHqRbv

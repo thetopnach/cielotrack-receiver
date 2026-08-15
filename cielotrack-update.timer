@@ -1,0 +1,20 @@
+[Unit]
+Description=Nightly CieloTrack receiver update check
+Documentation=https://github.com/thetopnach/cielotrack-receiver
+
+[Timer]
+# Local time, deliberately. Receivers are not all in one timezone, and the point of
+# the window is that the sky above *this* receiver is empty — Remote ID traffic here
+# drops to nothing between roughly 23:00 and 06:00 local.
+OnCalendar=*-*-* 02:00:00
+# Spread across two hours so a hundred receivers do not all fetch at 02:00:00, and so
+# a release that turns out to be bad cannot take the whole fleet down in one instant —
+# the early updaters roll themselves back before the later ones start.
+RandomizedDelaySec=2h
+# Deliberately NOT Persistent. A receiver that was powered off through its window
+# would otherwise update the moment it boots, which is usually the middle of the day
+# and often the moment someone is standing there trying to get it working.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

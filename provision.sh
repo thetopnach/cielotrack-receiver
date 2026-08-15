@@ -135,6 +135,34 @@ if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
     fi
 fi
 
+# 5. Nightly updates. Pinning the signing key here, at the moment a person has chosen
+#    to install this, is what makes the automatic part defensible: from now on the
+#    updater trusts this copy and not whatever key the repository happens to contain.
+mkdir -p /etc/cielotrack
+if [[ -f "$INSTALL_DIR/allowed_signers" ]]; then
+    if [[ -f /etc/cielotrack/allowed_signers ]] \
+       && ! cmp -s "$INSTALL_DIR/allowed_signers" /etc/cielotrack/allowed_signers; then
+        echo "  NOTE: the release signing key in this checkout differs from the pinned one."
+        echo "        Leaving the pinned key alone — a key that can replace itself is not a pin."
+        echo "        If this is a genuine key rotation, replace it deliberately:"
+        echo "          sudo cp $INSTALL_DIR/allowed_signers /etc/cielotrack/allowed_signers"
+    else
+        cp "$INSTALL_DIR/allowed_signers" /etc/cielotrack/allowed_signers
+        echo "  pinned the release signing key to /etc/cielotrack/allowed_signers"
+    fi
+fi
+
+if [[ -f "$INSTALL_DIR/cielotrack-update.service" ]]; then
+    sed "s#^ExecStart=.*#ExecStart=$INSTALL_DIR/update.sh#" \
+        "$INSTALL_DIR/cielotrack-update.service" > /etc/systemd/system/cielotrack-update.service
+    cp "$INSTALL_DIR/cielotrack-update.timer" /etc/systemd/system/cielotrack-update.timer
+    chmod +x "$INSTALL_DIR/update.sh" 2>/dev/null || true
+    systemctl daemon-reload
+    systemctl enable --now cielotrack-update.timer
+    echo "  nightly updates enabled (02:00-04:00 local, signed releases only)"
+    echo "    to disable: sudo touch /etc/cielotrack/no-auto-update"
+fi
+
 systemctl daemon-reload
 systemctl enable --now "cielotrack-monitor@$IFACE.service"
 
@@ -143,3 +171,5 @@ echo "Done. Verify:"
 echo "  iw dev $IFACE info | grep -E 'type|channel'     # expect: monitor, channel 6"
 echo "  systemctl status cielotrack-receiver"
 echo "  cat $INSTALL_DIR/status.json                    # radios.problems should be []"
+echo "  sudo $INSTALL_DIR/update.sh --check             # what a nightly run would do"
+echo "  systemctl list-timers cielotrack-update         # when it next runs"

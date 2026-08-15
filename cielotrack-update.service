@@ -1,0 +1,21 @@
+[Unit]
+Description=Update the CieloTrack receiver to the newest signed release
+Documentation=https://github.com/thetopnach/cielotrack-receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cielotrack-receiver/update.sh
+# Runs as root because it restarts the receiver and writes the unit file. It is
+# deliberately not sandboxed the way the receiver is: it exists to change /etc and
+# /opt, which is precisely what that sandbox forbids.
+#
+# A failed update is not a failed unit — update.sh has already rolled the receiver
+# back by the time it exits non-zero, and the useful record is in the journal:
+#
+#   journalctl -u cielotrack-update
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

@@ -7,3 +7,4 @@ device_credentials.json
 *.log
 __pycache__/
 *.pyc
+status.json
