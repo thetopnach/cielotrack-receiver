@@ -141,7 +141,14 @@ def installed_version():
     directory = os.path.dirname(os.path.abspath(__file__))
     try:
         described = subprocess.run(
-            ["git", "-C", directory, "describe", "--tags", "--always", "--dirty"],
+            # safe.directory because the service runs as root while the checkout is
+            # usually owned by the operator, and git refuses to read a repository whose
+            # owner differs. Naming the directory here rather than relying on ambient
+            # config keeps this working under systemd, where HOME is not the root
+            # account's own — and trusting it to report a version is not a new risk,
+            # since this process is already executing the code inside it.
+            ["git", "-c", f"safe.directory={directory}", "-C", directory,
+             "describe", "--tags", "--always", "--dirty"],
             capture_output=True, text=True, timeout=5)
         if described.returncode == 0 and described.stdout.strip():
             return described.stdout.strip()
