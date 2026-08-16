@@ -33,6 +33,10 @@ contains() {
   if grep -qF "$3" <<<"$2"; then echo "  PASS  $1"; pass=$((pass+1));
   else echo "  FAIL  $1 — output lacked [$3]"; fail=$((fail+1)); fi
 }
+lacks() {
+  if grep -qF "$3" <<<"$2"; then echo "  FAIL  $1 — output contained [$3]"; fail=$((fail+1));
+  else echo "  PASS  $1"; pass=$((pass+1)); fi
+}
 
 mkdir -p "$CONFIG"
 git init --quiet --bare "$ORIGIN"
@@ -114,11 +118,47 @@ check "checkout restored to the previous release" "$(cd "$INSTALL" && git descri
 check "payload restored" "$(cat "$INSTALL/payload.txt")" "v2 payload"
 
 echo
+echo "release channels"
+# A prerelease must not reach a stable receiver. Before channels existed the tag glob
+# matched v1.3.0-rc1 as readily as v1.3.0, so tagging a candidate shipped it to
+# everybody — the exact thing a canary is supposed to prevent.
+cd "$WORK" || exit 1
+echo "rc payload" > payload.txt
+git add -A; git commit --quiet -m "rc"
+git tag -s v1.3.0-rc1 -m "release candidate"
+git push --quiet origin HEAD:main --tags
+
+echo stable > "$CONFIG/channel"
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh --check 2>&1)"
+lacks "stable does not choose a prerelease" "$out" "v1.3.0-rc1"
+
+echo canary > "$CONFIG/channel"
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh --check 2>&1)"
+contains "canary sees the prerelease" "$out" "v1.3.0-rc1"
+
+# Once the real release exists the canary must move to it, not sit on the candidate.
+# git and sort -V both rank v1.3.0-rc1 above v1.3.0 unless told otherwise, so this is
+# the assertion that catches a canary stranded on a release candidate forever.
+cd "$WORK" || exit 1
+git tag -s v1.3.0 -m "the real thing"
+git push --quiet origin HEAD:main --tags
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh --check 2>&1)"
+contains "canary prefers the final release over its candidate" "$out" "latest : v1.3.0"
+
+echo "nonsense" > "$CONFIG/channel"
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh --check 2>&1)"
+contains "an unreadable channel falls back to stable" "$out" "using stable"
+
+rm -f "$CONFIG/channel"
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh --check 2>&1)"
+contains "no channel file means stable" "$out" "channel: stable"
+
+echo
 echo "an unsigned release is refused"
 cd "$WORK" || exit 1
 echo "v4 payload" > payload.txt
 git add -A; git commit --quiet -m "v4"
-git tag -a v1.3.0 -m "unsigned release"      # deliberately not signed
+git tag -a v1.4.0 -m "unsigned release"      # deliberately not signed
 git push --quiet origin HEAD:main --tags
 out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh 2>&1)"
 contains "refuses an unsigned tag" "$out" "did not verify"

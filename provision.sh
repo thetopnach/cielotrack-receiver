@@ -152,6 +152,17 @@ if [[ -f "$INSTALL_DIR/allowed_signers" ]]; then
     fi
 fi
 
+# Written rather than left absent so the channel is discoverable — an operator looking
+# for "which releases does this box take" finds a file, not a default buried in a script.
+# Absent means stable anyway, so this changes nothing for anyone who deletes it.
+if [[ ! -f /etc/cielotrack/channel ]]; then
+    echo stable > /etc/cielotrack/channel
+    echo "  release channel: stable (/etc/cielotrack/channel)"
+    echo "    to take prereleases first: echo canary | sudo tee /etc/cielotrack/channel"
+else
+    echo "  release channel: $(cat /etc/cielotrack/channel) (unchanged)"
+fi
+
 if [[ -f "$INSTALL_DIR/cielotrack-update.service" ]]; then
     sed "s#^ExecStart=.*#ExecStart=$INSTALL_DIR/update.sh#" \
         "$INSTALL_DIR/cielotrack-update.service" > /etc/systemd/system/cielotrack-update.service

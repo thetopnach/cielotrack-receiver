@@ -139,6 +139,27 @@ To turn it off:
 sudo touch /etc/cielotrack/no-auto-update
 ```
 
+### Channels
+
+`/etc/cielotrack/channel` decides which releases a receiver accepts. It contains
+`stable` unless you change it, and an absent file means stable too — the safe channel
+has to be the one you end up on by doing nothing.
+
+| | |
+|---|---|
+| `stable` | Final releases only. This is what you want. |
+| `canary` | Also takes release candidates, so this receiver runs a release before the fleet does. |
+
+```bash
+echo canary | sudo tee /etc/cielotrack/channel
+```
+
+Running one receiver on `canary` is worth doing if you have two, and the reason is
+narrow: the automatic health check can only catch faults the receiver can see in
+itself. A release that installs cleanly, reports every radio healthy, and simply
+*hears less* passes that check. Somebody has to look at the numbers, and a canary is
+what gives them a day to do it.
+
 A checkout with local modifications is never touched — if you are mid-debug, the
 updater leaves you alone and says so.
 

@@ -32,6 +32,7 @@ UNIT_PATH="${CIELOTRACK_UNIT_PATH:-/etc/systemd/system/${SERVICE}.service}"
 CONFIG_DIR="${CIELOTRACK_CONFIG_DIR:-/etc/cielotrack}"
 PINNED_SIGNERS="${CONFIG_DIR}/allowed_signers"
 OPT_OUT="${CONFIG_DIR}/no-auto-update"
+CHANNEL_FILE="${CONFIG_DIR}/channel"
 STATUS_FILE="${CIELOTRACK_STATUS_FILE:-${INSTALL_DIR}/status.json}"
 # Two heartbeats plus warmup. Long enough that a healthy receiver has certainly
 # reported, short enough that a broken one is rolled back inside the quiet window.
@@ -66,16 +67,57 @@ CURRENT_DESC="$(git describe --tags --always 2>/dev/null || echo "$CURRENT_COMMI
 log "fetching releases"
 git fetch --quiet --tags --force origin || fail "could not reach the release repository"
 
-# Highest version-sorted tag of the form vN.N.N. Release candidates and anything else
-# are ignored, so tagging an experiment cannot roll it out to the fleet.
-LATEST="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)"
+# --- which releases this receiver accepts -------------------------------------------
+# Two channels. stable takes only final releases. canary also takes prereleases, so
+# something is running a release before the fleet is, and a fault that survives the
+# health check below — a release that installs cleanly, reports healthy, and quietly
+# hears less — has somewhere to show up while a person is watching.
+#
+# An absent or unreadable file means stable, because the safe channel has to be the one
+# a receiver ends up on by doing nothing.
+CHANNEL="stable"
+if [[ -r "$CHANNEL_FILE" ]]; then
+    CHANNEL="$(tr -d '[:space:]' < "$CHANNEL_FILE" | tr '[:upper:]' '[:lower:]')"
+fi
+case "$CHANNEL" in
+    stable|canary) ;;
+    *)  log "unrecognised channel '${CHANNEL}' in ${CHANNEL_FILE} — using stable"
+        CHANNEL="stable" ;;
+esac
+
+# versionsort.suffix teaches git that -rc sorts below the release it precedes. Without
+# it git ranks v1.2.0-rc2 *above* v1.2.0, and plain `sort -V` does the same — which
+# would strand a canary on a release candidate forever once the real release shipped.
+#
+# The prerelease test is a shell glob rather than grep deliberately: this runs on
+# whatever the operator happens to have installed, and grep is not always GNU grep.
+select_release() {
+    local tag
+    while IFS= read -r tag; do
+        [[ -n "$tag" ]] || continue
+        if [[ "$CHANNEL" == "stable" ]]; then
+            case "$tag" in *-*) continue ;; esac
+        fi
+        printf '%s\n' "$tag"
+        return 0
+    done < <(git -c versionsort.suffix=-rc tag --sort=-v:refname \
+                 --list 'v[0-9]*.[0-9]*.[0-9]*')
+    return 1
+}
+
+LATEST="$(select_release || true)"
 [[ -n "$LATEST" ]] || { log "no release tags published yet — nothing to do"; exit 0; }
+log "channel: $CHANNEL"
 
 LATEST_COMMIT="$(git rev-parse "${LATEST}^{commit}")"
 if [[ "$LATEST_COMMIT" == "$CURRENT_COMMIT" ]]; then
-    log "already on $CURRENT_DESC (latest release $LATEST)"
+    log "already on $CURRENT_DESC (latest for $CHANNEL is $LATEST)"
     exit 0
 fi
+
+# Note this can move a receiver *backwards*: switching a canary to stable while it is
+# running a prerelease puts it on the newest final release, which is an older commit.
+# That is the point of switching back, so it is allowed rather than guarded against.
 
 log "current: $CURRENT_DESC"
 log "latest : $LATEST"

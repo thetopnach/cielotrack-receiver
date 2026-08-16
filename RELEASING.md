@@ -63,6 +63,36 @@ git tag --verify v1.2.0
 Expect `Good "git" signature`. Anything else means receivers will refuse it, which is the
 pin working — do not work around it, find out why.
 
+## Channels, and how a release is promoted
+
+Receivers read `/etc/cielotrack/channel`: `stable` takes final releases only, `canary`
+also takes release candidates. Absent or unreadable means stable.
+
+So promotion is not a flag or a command — it is **cutting the final tag**. A release
+candidate reaches only the canaries; the same commit tagged without the `-rc` suffix
+reaches everyone.
+
+```bash
+git tag -s v1.3.0-rc1 -m "What this is, and what to watch."
+git push origin main --tags
+# ...canaries take it that night. Look at them the next day.
+git tag -s v1.3.0 -m "What changed."      # same commit, now for the fleet
+git push origin --tags
+```
+
+Tag the **same commit** when promoting. If the tree moved in between, what soaked
+overnight is not what ships, and the soak proved nothing.
+
+The reason to bother, given every receiver already verifies and rolls itself back: that
+check only catches faults a receiver can see in itself. A release that installs cleanly,
+reports every radio healthy, and quietly hears less passes it — that is precisely the
+shape of the outage on 2026-08-15, where capture ran perfectly for seventeen hours while
+nothing reached the server. A person comparing yesterday's detection count to today's
+catches that. Nothing automatic here does.
+
+If you are not going to look at the canary, skip the candidate and tag the release
+directly. A soak nobody reads is just a delay.
+
 ## Numbering
 
 The question is not how big the change is, it is what it asks of the operator.
