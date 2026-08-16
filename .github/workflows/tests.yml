@@ -22,7 +22,22 @@ jobs:
         with:
           python-version: '3.11'
       - name: Run the state machine tests
-        run: python3 tests/test_receiver_state.py
+        run: |
+          set -o pipefail
+          python3 tests/test_receiver_state.py 2>&1 | tee /tmp/state-machine.log
+
+      # Into the job summary, which is readable without downloading the log archive.
+      # A failing test is only useful if you can see which assertion failed, and the
+      # run log needs credentials the person debugging may not have to hand.
+      - name: Publish the output
+        if: always()
+        run: |
+          {
+            echo '### contact state machine'
+            echo '```'
+            tail -60 /tmp/state-machine.log 2>/dev/null || echo "no output captured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   updater:
     name: updater and rollback
@@ -48,7 +63,19 @@ jobs:
           echo "systemd and passwordless sudo are available"
 
       - name: Run the updater tests
-        run: bash tests/test_update.sh
+        run: |
+          set -o pipefail
+          bash tests/test_update.sh 2>&1 | tee /tmp/updater.log
+
+      - name: Publish the output
+        if: always()
+        run: |
+          {
+            echo '### updater and rollback'
+            echo '```'
+            tail -60 /tmp/updater.log 2>/dev/null || echo "no output captured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   shell:
     name: shell syntax
