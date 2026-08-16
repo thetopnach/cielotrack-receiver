@@ -1,5 +1,7 @@
 # CieloTrack Receiver
 
+[![tests](https://github.com/thetopnach/cielotrack-receiver/actions/workflows/tests.yml/badge.svg)](https://github.com/thetopnach/cielotrack-receiver/actions/workflows/tests.yml)
+
 Listens for drone Remote ID broadcasts over Bluetooth LE and Wi-Fi, decodes them, and
 reports what it hears to [cielotrack.com](https://cielotrack.com).
 
