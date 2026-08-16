@@ -232,10 +232,22 @@ Bluetooth 4 cannot see. The tracker logs which mode it got:
 
 If it says legacy instead, the adapter or driver doesn't support what's needed.
 
-**Don't rotate Wi-Fi channels.** It's tempting to scan the band. In practice every
-Remote ID beacon we have decoded arrived on channel 6, and a rotating scan spends most
-of its time listening to empty channels while missing beacons on the one that matters.
-Parking on 6 measurably outperformed rotating.
+**Don't rotate Wi-Fi channels — but know why.** A rotating scan is away from any given
+channel most of the time, so it misses beacons on the one that matters. Parking on 6 is
+the default here for that reason.
+
+The evidence behind 6 is narrower than "every beacon we decoded was on 6", which would
+be circular — you mostly find beacons where you are listening. What was actually
+measured: two Wing Hummingbirds produced 65 decodes across two airframes, all on channel
+6 with SSID `WING_AC_RID`, and nothing on 44 or 149. Sweeping 1, 6 and 11 near Dallas on
+2026-08-16 found no Remote ID vendor IE on any of them across ~29,000 frames.
+
+So 6 is a tested default for one manufacturer and an untested one for the rest — nothing
+contradicts it, and little confirms it beyond Wing. The honest summary is that Wi-Fi
+Remote ID is rare here rather than that it lives on channel 6: this receiver has logged
+ten Wi-Fi detections in its lifetime against a hundred and fifty-seven on Bluetooth.
+Somewhere with more Wi-Fi traffic, test rather than inherit — `sudo iw dev wlan1 set
+channel 1` and watch — before assuming 6 is right for the aircraft overhead.
 
 **Antenna placement beats everything.** Moving one receiver to the other side of the
 house changed what it could hear more than any software change we made. If you are
