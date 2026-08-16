@@ -246,6 +246,56 @@ def test_write_failures_are_reported_then_clear():
         rt.WIFI_INTERFACE = original_wifi
 
 
+def test_rejected_releases_are_reported():
+    """A release this receiver refused has to reach the heartbeat.
+
+    The receiver is healthy after a rollback — it is running the last version that
+    worked — so this is deliberately not a fault and must not make the device look
+    degraded. It is news about the release, and it is only actionable centrally: one
+    receiver refusing a version is a curiosity, thirty refusing the same one is the
+    only warning that a release should be withdrawn.
+    """
+    print("\ntest_rejected_releases_are_reported")
+    original_position = rt.configured_position
+    original_wifi = rt.WIFI_INTERFACE
+    original_rejected = rt.REJECTED_FILE
+    rt.configured_position = lambda: None
+    rt.WIFI_INTERFACE = None
+    rt.radio_state["ble_stream"] = None
+    rt.radio_state["ble_mode"] = "extended"
+    directory = tempfile.mkdtemp()
+    rt.REJECTED_FILE = os.path.join(directory, "rejected")
+
+    try:
+        status = rt.collect_radio_status()
+        ok = check("no file means nothing rejected", status.get("rejected_releases") == [],
+                   str(status.get("rejected_releases")))
+
+        with open(rt.REJECTED_FILE, "w") as handle:
+            handle.write("v1.3.0  # rejected 2026-08-16T02:14:03-05:00\n")
+            handle.write("\n")
+            handle.write("v1.4.0 # rejected later\n")
+        status = rt.collect_radio_status()
+        ok &= check("both versions are reported, comments stripped",
+                    status.get("rejected_releases") == ["v1.3.0", "v1.4.0"],
+                    str(status.get("rejected_releases")))
+        ok &= check("a rejected release is not reported as a fault",
+                    "detections_not_queued" not in status["problems"]
+                    and all("reject" not in p for p in status["problems"]),
+                    str(status["problems"]))
+
+        rt.REJECTED_FILE = os.path.join(directory, "does-not-exist")
+        status = rt.collect_radio_status()
+        ok &= check("an unreadable file is not an error",
+                    status.get("rejected_releases") == [],
+                    str(status.get("rejected_releases")))
+        return ok
+    finally:
+        rt.configured_position = original_position
+        rt.WIFI_INTERFACE = original_wifi
+        rt.REJECTED_FILE = original_rejected
+
+
 TESTS = [
     test_rekey_during_grace_period,
     test_expired_cooldown_does_not_suppress,
@@ -253,6 +303,7 @@ TESTS = [
     test_both_transports_are_credited,
     test_concurrent_transports_do_not_corrupt_state,
     test_write_failures_are_reported_then_clear,
+    test_rejected_releases_are_reported,
 ]
 
 

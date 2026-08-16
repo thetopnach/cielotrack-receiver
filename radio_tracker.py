@@ -544,6 +544,7 @@ def collect_radio_status():
     return {
         "started_at": radio_state["started_at"],
         "version": VERSION,
+        "rejected_releases": rejected_releases(),
         "ble": {"mode": radio_state["ble_mode"], "stream_alive": ble_alive},
         "wifi": wifi,
         "last_detection_at": dict(radio_state["last_detection_at"]),
@@ -564,6 +565,28 @@ def collect_radio_status():
 # neither.
 STATUS_FILE = os.environ.get(
     "STATUS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "status.json"))
+
+# Written by update.sh when a release failed its check here and was rolled back. The
+# receiver is healthy afterwards — it is running the last version that worked — so this
+# is deliberately not a fault. It is news about the *release*, and it is only useful
+# centrally: one receiver refusing a version is a local curiosity, and thirty refusing
+# the same version is the only warning anyone gets that a release should be withdrawn.
+REJECTED_FILE = os.environ.get("REJECTED_FILE", "/etc/cielotrack/rejected")
+
+
+def rejected_releases():
+    """Versions this receiver installed, found broken, and rolled back from."""
+    versions = []
+    try:
+        with open(REJECTED_FILE) as handle:
+            for line in handle:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    versions.append(line)
+    except OSError:
+        # No file is the ordinary case: nothing has ever failed here.
+        return []
+    return versions
 SESSION_ID = secrets.token_hex(4)
 
 
