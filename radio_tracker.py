@@ -598,6 +598,13 @@ def write_status_file(radio_status):
     """
     with contact_lock:
         counters = json.loads(json.dumps(pipeline_counters))
+    # last_frame_at is kept as an epoch float on the hot path and rendered here, so the
+    # published shape is unchanged for anything reading status.json.
+    counters["last_frame_at"] = {
+        protocol: datetime.fromtimestamp(seen, timezone.utc)
+                          .strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        for protocol, seen in counters.get("last_frame_at", {}).items()
+    }
     payload = {
         "session": SESSION_ID,
         "started_at": radio_state["started_at"],
@@ -818,16 +825,42 @@ pipeline_counters = {
 reported_failures = {"enqueue_failures": 0, "status_write_failures": 0}
 
 
-def count_frame(protocol, decoded=False):
-    """One frame reached a decoder, and whether it yielded anything."""
+def count_frame(protocol):
+    """One frame reached a decoder — whether or not it carried anything.
+
+    Counting *every* frame is the whole point. This used to be incremented only after a
+    Remote ID message had already been extracted, which made frames_seen a duplicate of
+    messages_decoded and left the two silences it exists to separate looking identical:
+    a dead radio and an empty sky both read as zero. On 2026-08-15 a receiver sat at
+    zero for seventeen hours while every other signal reported healthy.
+
+    Remote ID is rare; ordinary 2.4 GHz traffic is not. So a live radio now counts
+    frames continuously — hundreds a second — and zero means the radio has stopped,
+    while frames climbing with messages flat means an empty sky or a decoder fault.
+
+    Deliberately split from count_decoded rather than taking a decoded flag: the two
+    are counted at different places on the BLE path, and a single call doing both is
+    what made it easy to count a frame twice.
+
+    This is a hot path. The timestamp is stored as an epoch float and formatted only
+    when the status file is written — strftime several hundred times a second is real
+    work for a value nobody reads until then.
+    """
     with contact_lock:
         pipeline_counters["frames_seen"][protocol] = \
             pipeline_counters["frames_seen"].get(protocol, 0) + 1
-        pipeline_counters["last_frame_at"][protocol] = \
-            datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        if decoded:
-            pipeline_counters["messages_decoded"][protocol] = \
-                pipeline_counters["messages_decoded"].get(protocol, 0) + 1
+        pipeline_counters["last_frame_at"][protocol] = time.time()
+
+
+def count_decoded(protocol):
+    """A frame yielded a Remote ID message.
+
+    May exceed frames_seen on BLE, and that is not a bug: one HCI event can batch
+    several advertisers' reports, so a single frame can carry several messages.
+    """
+    with contact_lock:
+        pipeline_counters["messages_decoded"][protocol] = \
+            pipeline_counters["messages_decoded"].get(protocol, 0) + 1
 
 # A drone's Wi-Fi MAC differs from its BLE MAC, so the same aircraft picked up on
 # both transports would otherwise be logged twice as two unrelated contacts. Once a
@@ -1030,6 +1063,10 @@ def check_packet_for_remote_id(packet_str):
     # every 20 bytes, so a text search for the signature misses every event unlucky
     # enough to have a line break fall inside it.
     event = hcidump_event_bytes(packet_str)
+    # Counted here, above the signature check. Every ordinary advertisement — phones,
+    # watches, televisions — returns on the next line, and counting below it is what
+    # left BLE unable to distinguish a dead adapter from a quiet sky.
+    count_frame("BLE")
     if ODID_BLE_SERVICE_SIGNATURE not in event:
         return
 
@@ -1042,7 +1079,7 @@ def check_packet_for_remote_id(packet_str):
     for address, adv_data, rssi_dbm in reports:
         msg = extract_odid_message(adv_data)
         if msg:
-            count_frame("BLE", decoded=True)
+            count_decoded("BLE")
             register_detection(address or "BLE-REMOTE-ID-UNIT", decode_message(msg),
                                "BLE", 1, rssi_dbm=rssi_dbm)
 
@@ -1297,8 +1334,15 @@ def wifi_capture_loop():
     """Wi-Fi Remote ID capture, in its own thread. Restarts on error rather than
     dying silently — a Wi-Fi problem must never take down BLE capture."""
     def on_detection(mac, telemetry, protocol, count, rssi):
-        count_frame(protocol, decoded=bool(telemetry))
+        # Counting moved to on_frame below, which fires for every frame rather than
+        # only the ones carrying Remote ID. Counting here as well would double-count
+        # exactly the frames that matter most.
         register_detection(mac, telemetry, protocol, count, rssi_dbm=rssi)
+
+    def on_frame(decoded):
+        count_frame("Wi-Fi")
+        if decoded:
+            count_decoded("Wi-Fi")
 
     while True:
         try:
@@ -1306,6 +1350,7 @@ def wifi_capture_loop():
                 WIFI_INTERFACE,
                 on_detection,
                 channels=WIFI_CHANNELS,
+                on_frame=on_frame,
             )
         except Exception as e:
             print(f"⚠️ Wi-Fi capture error on {WIFI_INTERFACE} (retrying in 10s): {e}")

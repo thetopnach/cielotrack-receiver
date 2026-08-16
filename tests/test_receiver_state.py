@@ -10,6 +10,7 @@ Run directly — no test framework required:
 
     python3 tests/test_receiver_state.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -296,6 +297,70 @@ def test_rejected_releases_are_reported():
         rt.REJECTED_FILE = original_rejected
 
 
+def test_frames_are_counted_whether_or_not_they_decode():
+    """The counter has to separate a dead radio from an empty sky.
+
+    It used to be incremented only after a Remote ID message had already been
+    extracted, which made frames_seen an exact copy of messages_decoded: both silences
+    read as zero. On 2026-08-15 a receiver sat at zero for seventeen hours while every
+    other signal reported healthy. Remote ID is rare and ordinary 2.4 GHz traffic is
+    not, so a live radio must show frames climbing even when nothing is flying.
+    """
+    print("\nframes are counted whether or not they decode")
+    rt.pipeline_counters["frames_seen"].clear()
+    rt.pipeline_counters["messages_decoded"].clear()
+    rt.pipeline_counters["last_frame_at"].clear()
+
+    for _ in range(201):
+        rt.count_frame("Wi-Fi")                    # every frame the radio delivers
+    rt.count_decoded("Wi-Fi")                      # one of them carried Remote ID
+
+    seen = rt.pipeline_counters["frames_seen"].get("Wi-Fi")
+    decoded = rt.pipeline_counters["messages_decoded"].get("Wi-Fi")
+    ok = check("a frame that decodes nothing is still counted", seen == 201, str(seen))
+    ok &= check("only the decoding one counts as decoded", decoded == 1, str(decoded))
+    ok &= check("a decoded frame is not counted twice as a frame", seen == 201, str(seen))
+    ok &= check("the two counters can now disagree, which is the point",
+                seen != decoded, f"{seen} vs {decoded}")
+
+    # A radio that has stopped is the case this must still report honestly.
+    rt.pipeline_counters["frames_seen"].clear()
+    ok &= check("a silent radio reports no frames at all",
+                rt.pipeline_counters["frames_seen"].get("Wi-Fi") is None)
+    return ok
+
+
+def test_the_status_file_still_publishes_iso_timestamps():
+    """last_frame_at is an epoch float on the hot path and must not leak that shape.
+
+    strftime on every frame is real work several hundred times a second for a value
+    nobody reads until the status file is written. Anything parsing status.json still
+    expects the ISO string it has always had.
+    """
+    print("\nthe status file keeps its published shape")
+    directory = tempfile.mkdtemp()
+    original = rt.STATUS_FILE
+    rt.STATUS_FILE = os.path.join(directory, "status.json")
+    rt.pipeline_counters["last_frame_at"].clear()
+    rt.count_frame("BLE")
+    rt.count_decoded("BLE")
+    try:
+        rt.write_status_file({"problems": []})
+        with open(rt.STATUS_FILE) as handle:
+            published = json.load(handle)
+        stamp = published["pipeline"]["last_frame_at"].get("BLE")
+        ok = check("last_frame_at is published as a string", isinstance(stamp, str), repr(stamp))
+        ok &= check("and it looks like an ISO timestamp",
+                    isinstance(stamp, str) and stamp.endswith("Z") and "T" in stamp,
+                    repr(stamp))
+        ok &= check("frames_seen is published too",
+                    published["pipeline"]["frames_seen"].get("BLE") == 1,
+                    str(published["pipeline"]["frames_seen"]))
+        return ok
+    finally:
+        rt.STATUS_FILE = original
+
+
 TESTS = [
     test_rekey_during_grace_period,
     test_expired_cooldown_does_not_suppress,
@@ -304,6 +369,8 @@ TESTS = [
     test_concurrent_transports_do_not_corrupt_state,
     test_write_failures_are_reported_then_clear,
     test_rejected_releases_are_reported,
+    test_frames_are_counted_whether_or_not_they_decode,
+    test_the_status_file_still_publishes_iso_timestamps,
 ]
 
 

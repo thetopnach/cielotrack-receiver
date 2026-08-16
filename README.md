@@ -98,10 +98,21 @@ aircraft are being heard but cannot be written to the upload queue.
 start, so a rising failure count next to a static recorded count is a receiver that is
 hearing everything and delivering nothing.
 
-`pipeline.frames_seen` counts frames that reached a decoder, but note that today it is
-only incremented once a Remote ID message has already been extracted, so it stays at
-zero over an empty sky and cannot by itself tell you a radio has died. Use
-`radios.problems` and the heartbeat for that.
+`pipeline.frames_seen` counts every frame that reached a decoder, and
+`pipeline.messages_decoded` counts the few that carried Remote ID. Together they
+separate the two silences a heartbeat cannot tell apart, because Remote ID is rare and
+ordinary 2.4 GHz traffic is not:
+
+| frames_seen | messages_decoded | what it means |
+|---|---|---|
+| climbing | climbing | working |
+| climbing | flat | radios fine, nothing flying — or a decoder fault |
+| **flat at zero** | zero | **that radio has stopped** |
+
+On a populated channel a live adapter counts hundreds of frames a second whether or not
+anything is in the air, so a protocol missing from `frames_seen` entirely is a radio
+that is not delivering — not a quiet sky. Check it against `radios.problems`, which
+reports what the adapter says about itself; this reports what it is actually doing.
 
 ## Updates
 

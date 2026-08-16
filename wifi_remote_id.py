@@ -250,9 +250,15 @@ def _stale_reason(interface, bound_index, last_frame):
     return None
 
 
-def capture(interface, on_detection, stop_event=None, channels=CAPTURE_CHANNELS):
+def capture(interface, on_detection, stop_event=None, channels=CAPTURE_CHANNELS,
+            on_frame=None):
     """Blocking capture loop. Calls on_detection(mac, telemetry, protocol, count) for
     every frame carrying Remote ID. Intended to run in its own thread.
+
+    on_frame(decoded) is called once for every frame that reaches the decoder, whether
+    or not it yielded anything. That is what lets a caller tell a radio hearing nothing
+    from a radio that has stopped: Remote ID is rare, ordinary 2.4 GHz traffic is not,
+    so a live adapter reports frames continuously even over an empty sky.
 
     Rotates `interface` across `channels` while it runs; pass a single channel to
     park on it instead. The hopper is owned by this call and stopped when it
@@ -295,6 +301,10 @@ def capture(interface, on_detection, stop_event=None, channels=CAPTURE_CHANNELS)
                 continue
             last_frame = time.time()
             result = decode_wifi_frame(frame)
+            if on_frame:
+                # After the decode attempt, so one call covers both counters and a
+                # frame is never counted twice.
+                on_frame(bool(result))
             if result:
                 mac, telemetry, message_count, rssi_dbm = result
                 last_decode[0] = time.time()
