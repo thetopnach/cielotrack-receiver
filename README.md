@@ -106,7 +106,8 @@ zero over an empty sky and cannot by itself tell you a radio has died. Use
 ## Updates
 
 The receiver updates itself overnight, and you should know exactly what that means
-before you leave it running.
+before you leave it running. If you are the one publishing releases rather than
+receiving them, see [RELEASING.md](RELEASING.md).
 
 Once a night, at a random time between 02:00 and 04:00 **local** to the receiver, it
 checks for a new release. The window is when the sky is empty — Remote ID traffic here
