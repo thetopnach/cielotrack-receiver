@@ -21,6 +21,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      # radio_tracker imports python-dotenv at module scope, so without this every
+      # test fails identically at import. It passed locally only because the Pi has
+      # the package installed system-wide — the exact gap a clean CI machine exists
+      # to catch.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
       # One step per test, deliberately. A failing step names the test that failed, and
       # step names are visible without credentials to download the run log — "exit
       # code 1" over six tests is not a bug report. `if: always()` so one failure does
