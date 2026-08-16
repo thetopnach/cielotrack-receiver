@@ -246,14 +246,32 @@ def test_write_failures_are_reported_then_clear():
         rt.WIFI_INTERFACE = original_wifi
 
 
+TESTS = [
+    test_rekey_during_grace_period,
+    test_expired_cooldown_does_not_suppress,
+    test_cooldown_still_suppresses_while_live,
+    test_both_transports_are_credited,
+    test_concurrent_transports_do_not_corrupt_state,
+    test_write_failures_are_reported_then_clear,
+]
+
+
 if __name__ == "__main__":
-    results = [
-        test_rekey_during_grace_period(),
-        test_expired_cooldown_does_not_suppress(),
-        test_cooldown_still_suppresses_while_live(),
-        test_both_transports_are_credited(),
-        test_concurrent_transports_do_not_corrupt_state(),
-        test_write_failures_are_reported_then_clear(),
-    ]
+    # Naming one runs just that one. CI runs them as separate steps so a failure says
+    # which test failed in the step name alone — the run log needs credentials to
+    # download, and "exit code 1" with no visible assertion is not a bug report.
+    if len(sys.argv) > 1:
+        wanted = {name.lstrip("-").replace("-", "_") for name in sys.argv[1:]}
+        chosen = [t for t in TESTS if t.__name__ in wanted or
+                  t.__name__.removeprefix("test_") in wanted]
+        if not chosen:
+            print(f"no test matches {sorted(wanted)}; known tests:")
+            for t in TESTS:
+                print(f"  {t.__name__.removeprefix('test_')}")
+            sys.exit(2)
+    else:
+        chosen = TESTS
+
+    results = [t() for t in chosen]
     print(f"\n{sum(results)}/{len(results)} passed")
     sys.exit(0 if all(results) else 1)

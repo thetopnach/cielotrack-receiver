@@ -21,23 +21,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Run the state machine tests
-        run: |
-          set -o pipefail
-          python3 tests/test_receiver_state.py 2>&1 | tee /tmp/state-machine.log
-
-      # Into the job summary, which is readable without downloading the log archive.
-      # A failing test is only useful if you can see which assertion failed, and the
-      # run log needs credentials the person debugging may not have to hand.
-      - name: Publish the output
+      # One step per test, deliberately. A failing step names the test that failed, and
+      # step names are visible without credentials to download the run log — "exit
+      # code 1" over six tests is not a bug report. `if: always()` so one failure does
+      # not hide the state of the others.
+      - name: rekey during grace period
         if: always()
-        run: |
-          {
-            echo '### contact state machine'
-            echo '```'
-            tail -60 /tmp/state-machine.log 2>/dev/null || echo "no output captured"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: python3 tests/test_receiver_state.py rekey_during_grace_period
+      - name: expired cooldown does not suppress
+        if: always()
+        run: python3 tests/test_receiver_state.py expired_cooldown_does_not_suppress
+      - name: cooldown still suppresses while live
+        if: always()
+        run: python3 tests/test_receiver_state.py cooldown_still_suppresses_while_live
+      - name: both transports are credited
+        if: always()
+        run: python3 tests/test_receiver_state.py both_transports_are_credited
+      - name: concurrent transports do not corrupt state
+        if: always()
+        run: python3 tests/test_receiver_state.py concurrent_transports_do_not_corrupt_state
+      - name: write failures are reported then clear
+        if: always()
+        run: python3 tests/test_receiver_state.py write_failures_are_reported_then_clear
 
   updater:
     name: updater and rollback
