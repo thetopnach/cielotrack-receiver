@@ -17,8 +17,8 @@ jobs:
     name: contact state machine
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -57,7 +57,7 @@ jobs:
     steps:
       # The updater walks tag history, so a shallow clone would hide the thing under
       # test. This checkout is throwaway anyway — the test builds its own origin.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -93,7 +93,7 @@ jobs:
     name: shell syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - name: Check the scripts that run as root
