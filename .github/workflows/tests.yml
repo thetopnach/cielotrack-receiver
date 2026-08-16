@@ -1,0 +1,69 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  # So a release can be checked before it is cut, rather than after it has already
+  # started installing itself on other people's hardware overnight.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  state-machine:
+    name: contact state machine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run the state machine tests
+        run: python3 tests/test_receiver_state.py
+
+  updater:
+    name: updater and rollback
+    runs-on: ubuntu-latest
+    steps:
+      # The updater walks tag history, so a shallow clone would hide the thing under
+      # test. This checkout is throwaway anyway — the test builds its own origin.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Fails loudly rather than letting the job pass by quietly skipping. A test that
+      # silently does not run is worse than one that is missing, because it reports
+      # green: that is exactly how a receiver ran for 17 hours looking healthy while
+      # storing nothing.
+      - name: Check the runner can actually run this
+        run: |
+          set -e
+          systemctl is-system-running --quiet || \
+            echo "note: system state is $(systemctl is-system-running || true)"
+          systemctl --version | head -1
+          sudo -n true
+          echo "systemd and passwordless sudo are available"
+
+      - name: Run the updater tests
+        run: bash tests/test_update.sh
+
+  shell:
+    name: shell syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: Check the scripts that run as root
+        run: |
+          set -e
+          for script in update.sh provision.sh tests/test_update.sh; do
+            echo "== $script"
+            bash -n "$script"
+            # Warnings only. These scripts run as root on other people's machines, so
+            # the bar is "no probable bugs", not "no style opinions".
+            shellcheck -S warning "$script"
+          done

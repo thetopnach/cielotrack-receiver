@@ -10,4 +10,10 @@
 # this repository, rather than silently re-decided every night. Rotating a key is
 # therefore a deliberate act: it needs updating /etc/cielotrack/allowed_signers on each
 # receiver, which is inconvenient exactly in proportion to how serious it is.
-drone@station.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILJ8q7X0yL4tKfIVVex1fBfDEhzWCeNH8drgOWdHqRbv
+#
+# This key signs releases and does nothing else. It is deliberately not the key that
+# authenticates to GitHub or to any server: those are used constantly and live on
+# machines that are used for other things, and a single key doing both jobs means one
+# compromise lets an attacker push code, sign it as a release, and have every receiver
+# install it as root the same night.
+drone@station.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPGbVBwXNQmfX6pwcUL/6uByY7zQ2vpmfxy1QrrIAK/B

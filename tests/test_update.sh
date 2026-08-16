@@ -8,8 +8,10 @@
 #
 #     sudo -v && bash tests/test_update.sh
 #
-# It signs its own throwaway release tags with your SSH key, so it also proves the
-# signing path works on this machine before you cut a real release.
+# It generates a throwaway signing key of its own rather than borrowing the real
+# release key. That keeps the key that can install code on every receiver out of a
+# test that runs unattended, and it is what lets this run on a CI machine that has no
+# keys at all.
 set -uo pipefail
 
 BASE="$(mktemp -d)"
@@ -19,7 +21,8 @@ WORK="$BASE/work"
 INSTALL="$BASE/install"
 CONFIG="$BASE/config"
 UNIT="$BASE/stub.service"
-KEY="$HOME/.ssh/id_ed25519"
+KEY="$BASE/signing_key"
+ssh-keygen -q -t ed25519 -N '' -C "cielotrack update self-test" -f "$KEY"
 
 pass=0; fail=0
 check() {
@@ -34,7 +37,7 @@ contains() {
 mkdir -p "$CONFIG"
 git init --quiet --bare "$ORIGIN"
 git init --quiet "$WORK"
-cd "$WORK"
+cd "$WORK" || exit 1
 git config user.name Test; git config user.email drone@station.local
 git config gpg.format ssh; git config user.signingkey "$KEY"
 cp "$SRC/update.sh" .; chmod +x update.sh
@@ -48,7 +51,7 @@ git tag -s v1.0.0 -m "release 1.0.0"
 git remote add origin "$ORIGIN"; git push --quiet origin HEAD:main --tags
 
 git clone --quiet "$ORIGIN" "$INSTALL"
-cd "$INSTALL"; git checkout --quiet v1.0.0
+cd "$INSTALL" || exit 1; git checkout --quiet v1.0.0
 
 # The pinned key, as provision.sh would have written it.
 echo "drone@station.local $(cut -d' ' -f1-2 "$KEY.pub")" > "$CONFIG/allowed_signers"
@@ -65,7 +68,7 @@ contains "reports it is already on the latest release" "$out" "already on"
 
 echo
 echo "a newer signed release"
-cd "$WORK"
+cd "$WORK" || exit 1
 echo "v2 payload" > payload.txt
 git add -A; git commit --quiet -m "v2"
 git tag -s v1.1.0 -m "release 1.1.0"
@@ -93,7 +96,7 @@ check "payload actually updated" "$(cat "$INSTALL/payload.txt")" "v2 payload"
 
 echo
 echo "a release that breaks the receiver rolls back"
-cd "$WORK"
+cd "$WORK" || exit 1
 echo "v3 payload" > payload.txt
 git add -A; git commit --quiet -m "v3"
 git tag -s v1.2.0 -m "release 1.2.0"
@@ -112,7 +115,7 @@ check "payload restored" "$(cat "$INSTALL/payload.txt")" "v2 payload"
 
 echo
 echo "an unsigned release is refused"
-cd "$WORK"
+cd "$WORK" || exit 1
 echo "v4 payload" > payload.txt
 git add -A; git commit --quiet -m "v4"
 git tag -a v1.3.0 -m "unsigned release"      # deliberately not signed

@@ -145,6 +145,25 @@ but they do not protect against the signing key itself being stolen. If that is 
 trade you want on your hardware, disable it and update by hand — the project works
 exactly the same either way.
 
+### If you installed before v1.1.0
+
+The release signing key changed in v1.1.0. Releases up to v1.0.1 were signed with a key
+that also authenticated to GitHub, which meant one stolen key could both publish a
+release and sign it; releases are now signed by a key that does nothing else.
+
+Your receiver pinned the old key when you installed, and will correctly refuse releases
+signed with the new one — you will see `signature on … did not verify` in
+`journalctl -u cielotrack-update`. Re-pin deliberately:
+
+```bash
+cd /opt/cielotrack-receiver
+git fetch --tags
+git show v1.1.0:allowed_signers | sudo tee /etc/cielotrack/allowed_signers
+sudo ./update.sh
+```
+
+A fresh install needs none of this.
+
 ## Tests
 
 ```bash
@@ -152,9 +171,14 @@ python3 tests/test_receiver_state.py
 sudo -v && bash tests/test_update.sh
 ```
 
-The second one signs throwaway release tags with your SSH key against a throwaway
-repository, so it also proves the signing path works on your machine before you cut a
-real release. It cleans up after itself.
+Both also run on every push, in [`.github/workflows/tests.yml`](.github/workflows/tests.yml).
+
+The second builds a throwaway origin, a throwaway checkout and a stub service unit, and
+generates its own signing key rather than borrowing the real one — the key that can
+install code on every receiver has no business in a test that runs unattended. It walks
+the whole path: a good release applied, a bad one rolled back, an unsigned tag refused,
+opt-out honoured, and a checkout with local edits left alone. It needs `sudo` because
+the thing it is testing restarts a service, and it cleans up after itself.
 
 No framework needed. They cover the contact state machine — where the receiver decides
 whether a drone that was heard becomes a drone that was recorded.
