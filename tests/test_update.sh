@@ -118,6 +118,29 @@ check "checkout restored to the previous release" "$(cd "$INSTALL" && git descri
 check "payload restored" "$(cat "$INSTALL/payload.txt")" "v2 payload"
 
 echo
+echo "a rolled-back release is not retried forever"
+# The rollback test above left v1.2.0 installed-and-rejected. Before this existed the
+# failed tag was still the newest, so the receiver reinstalled it, failed the same
+# check and rolled back again — nightly, indefinitely.
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh --check 2>&1)"
+contains "the failed release is skipped" "$out" "skipping v1.2.0"
+lacks "and is not offered as an update" "$out" "update available"
+
+# A newer release must still be tried, or a fix is blocked by the release it repairs.
+cd "$WORK" || exit 1
+echo "fixed payload" > payload.txt
+git add -A; git commit --quiet -m "the fix"
+git tag -s v1.2.1 -m "fixes the bad release"
+git push --quiet origin HEAD:main --tags
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh --check 2>&1)"
+contains "a newer release is still offered" "$out" "v1.2.1"
+
+# Clearing the record is how an operator says "try it again".
+sudo rm -f "$CONFIG/rejected"
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh --check 2>&1)"
+lacks "clearing the record makes it retryable" "$out" "skipping v1.2.0"
+
+echo
 echo "release channels"
 # A prerelease must not reach a stable receiver. Before channels existed the tag glob
 # matched v1.3.0-rc1 as readily as v1.3.0, so tagging a candidate shipped it to

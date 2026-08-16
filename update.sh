@@ -33,6 +33,7 @@ CONFIG_DIR="${CIELOTRACK_CONFIG_DIR:-/etc/cielotrack}"
 PINNED_SIGNERS="${CONFIG_DIR}/allowed_signers"
 OPT_OUT="${CONFIG_DIR}/no-auto-update"
 CHANNEL_FILE="${CONFIG_DIR}/channel"
+REJECTED_FILE="${CONFIG_DIR}/rejected"
 STATUS_FILE="${CIELOTRACK_STATUS_FILE:-${INSTALL_DIR}/status.json}"
 # Two heartbeats plus warmup. Long enough that a healthy receiver has certainly
 # reported, short enough that a broken one is rolled back inside the quiet window.
@@ -40,7 +41,11 @@ HEALTH_TIMEOUT="${CIELOTRACK_HEALTH_TIMEOUT:-180}"
 CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 
-log() { echo "[cielotrack-update] $*"; }
+# Both to stderr. select_release below returns its answer on stdout and is read with a
+# command substitution, so a log line written to stdout would be captured as part of the
+# version string — a bug that would look like a corrupt tag name rather than a stray
+# message. systemd records both streams identically, so the journal is unchanged.
+log() { echo "[cielotrack-update] $*" >&2; }
 fail() { echo "[cielotrack-update] ERROR: $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || fail "must run as root (it restarts the service and writes to /etc)"
@@ -91,12 +96,37 @@ esac
 #
 # The prerelease test is a shell glob rather than grep deliberately: this runs on
 # whatever the operator happens to have installed, and grep is not always GNU grep.
+# A release this receiver already tried and rolled back from. Without this the failed
+# tag is still the newest one, so the receiver reinstalls it, fails the same check, and
+# rolls back again — every night, indefinitely, restarting the service twice each time.
+# Nothing raises an alarm, because from the outside it just looks like a receiver that
+# keeps restarting in the small hours.
+is_rejected() {
+    [[ -r "$REJECTED_FILE" ]] || return 1
+    local line
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="${line//[[:space:]]/}"
+        [[ -n "$line" ]] || continue
+        [[ "$line" == "$1" ]] && return 0
+    done < "$REJECTED_FILE"
+    return 1
+}
+
 select_release() {
     local tag
     while IFS= read -r tag; do
         [[ -n "$tag" ]] || continue
         if [[ "$CHANNEL" == "stable" ]]; then
             case "$tag" in *-*) continue ;; esac
+        fi
+        # Only this exact tag is skipped, never "everything up to it" — a newer release
+        # is tried on its own merits, so a fix is never blocked by the broken release it
+        # replaces. That is the whole reason this is a list of versions rather than a
+        # low-water mark.
+        if is_rejected "$tag"; then
+            log "skipping $tag: it failed on this receiver before"
+            continue
         fi
         printf '%s\n' "$tag"
         return 0
@@ -146,6 +176,13 @@ if [[ -f "$UNIT_PATH" ]]; then
 fi
 
 restore() {
+    # Recorded here rather than at the individual failure sites because every path that
+    # reaches this function means the same thing: this release did not work on this
+    # receiver. An operator who disagrees can clear the file and it will be retried.
+    mkdir -p "$CONFIG_DIR"
+    printf '%s  # rejected %s\n' "$LATEST" "$(date -Is 2>/dev/null || date)" \
+        >> "$REJECTED_FILE"
+    log "recorded $LATEST as rejected — it will not be retried; to undo, edit $REJECTED_FILE"
     log "rolling back to $CURRENT_DESC"
     git checkout --quiet --force "$CURRENT_COMMIT" || log "WARNING: could not restore the previous commit"
     if [[ -n "$ROLLBACK_UNIT" ]]; then

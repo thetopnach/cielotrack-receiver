@@ -127,6 +127,11 @@ puts the previous release **and the previous service unit** back and restarts. T
 matters: it lives in `/etc`, so a plain `git pull` never updates it, and fixes to the
 sandboxing or capabilities would otherwise silently never reach anyone already running.
 
+A release that failed here is written to `/etc/cielotrack/rejected` and not tried again,
+so a receiver settles on the last version that worked rather than reinstalling a broken
+one every night. A *newer* release is still installed normally — a fix is never blocked
+by the release it repairs. To give a rejected version another chance, delete its line.
+
 ```bash
 sudo ./update.sh --check              # what tonight's run would do, changing nothing
 systemctl list-timers cielotrack-update
