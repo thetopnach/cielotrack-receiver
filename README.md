@@ -267,8 +267,9 @@ seeing less than you expect, move the antenna before you debug the code.
 ## Sending data from your own hardware
 
 You don't have to run this code. Anything that can make HTTPS requests can report to
-CieloTrack — register, claim, then POST detections. The full field reference is on the
-**Receivers** page once you sign in, and only `detected_at` is required.
+CieloTrack — register, claim, then POST detections. The full field reference is at
+[cielotrack.com/build](https://cielotrack.com/build), which needs no account, and only
+`detected_at` is required.
 
 ```bash
 curl -X POST https://cielotrack.com/v1/detections \
