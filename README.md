@@ -19,7 +19,7 @@ share them.
 |---|---|
 | **Raspberry Pi** | A 4 or 5. Anything that can run 64-bit Raspberry Pi OS is fine. |
 | **Bluetooth adapter** | Must support **Bluetooth 5 extended advertising**. This is the part people get wrong — a Bluetooth 4 dongle will connect happily and simply never see most drones. |
-| **Wi-Fi adapter** | Must support **monitor mode**, and must be a second adapter — monitor mode takes the interface off your network. |
+| **Wi-Fi adapter** | Optional, and worth having. Must support **monitor mode**, and must be a second adapter — monitor mode takes the interface off your network. Without one the receiver is BLE-only, which still hears every drone that broadcasts over Bluetooth; manufacturers choose their transport, so this is a real receiver, not half of one. |
 | **USB 2.0 port or extension** | Not optional. See below. |
 
 The Pi's built-in Bluetooth works, but a dongle on an extension cable placed away from
@@ -38,15 +38,19 @@ sudo cp .env.example .env
 Edit `.env` and set `BASE_LAT` / `BASE_LON` to where the receiver sits, and
 `WIFI_INTERFACE` to your monitor-capable adapter.
 
-Then provision the host state the receiver needs but cannot create for itself —
-monitor mode, protection from NetworkManager reclaiming the adapter, re-application
-when it is replugged, and masking `bluetoothd` so it stops competing for the Bluetooth
-controller:
+Then provision the host state the receiver needs but cannot create for itself — the
+user it runs as, the directory its data lives in, monitor mode, protection from
+NetworkManager reclaiming the adapter, re-application when it is replugged, and masking
+`bluetoothd` so it stops competing for the Bluetooth controller:
 
 ```bash
-sudo ./provision.sh            # lists your candidate adapters
-sudo ./provision.sh wlan1      # provisions that one
+sudo ./provision.sh            # everything except Wi-Fi capture
+sudo ./provision.sh wlan1      # all of that, plus monitor mode on wlan1
 ```
+
+The adapter is optional. Run it without one on a BLE-only receiver, or on one still
+waiting for an adapter to arrive — and set `WIFI_INTERFACE=` (empty) in `.env`, or the
+receiver spends the day retrying a device that is not there.
 
 This also pins the release signing key and enables the nightly updater described under
 [Updates](#updates).
@@ -55,7 +59,8 @@ Everything it writes is derived from the adapter you name, so no file needs
 hand-editing. It is safe to run again after changing hardware.
 
 Skipping this step leaves Wi-Fi capture unable to work at all: the receiver retunes the
-channel, it does not create monitor mode. Then:
+channel, it does not create monitor mode — and, since the service runs as `cielotrack`
+rather than root, leaves it with no user to run as. Then:
 
 ```bash
 sudo cp cielotrack-receiver.service /etc/systemd/system/
@@ -81,12 +86,12 @@ database waiting to be read. If a receiver loses its key, claim it again.
 
 ## Checking it works
 
-The receiver writes `status.json` beside itself every minute. It needs neither the
-server nor a claimed device, which is the point — those are usually what you are trying
-to diagnose.
+The receiver writes `status.json` into its state directory every minute. It needs
+neither the server nor a claimed device, which is the point — those are usually what you
+are trying to diagnose.
 
 ```bash
-cat /opt/cielotrack-receiver/status.json
+cat /var/lib/cielotrack/status.json
 ```
 
 `radios.problems` is empty when both radios are configured as intended, and names any
@@ -179,11 +184,41 @@ what gives them a day to do it.
 A checkout with local modifications is never touched — if you are mid-debug, the
 updater leaves you alone and says so.
 
-Worth being plain about the trade: this runs as root and installs code fetched from
-the internet. Signing and pinning mean a compromised mirror cannot feed you a release,
+Worth being plain about the trade: the *updater* runs as root and installs code fetched
+from the internet — the receiver itself does not, and has not since v1.4.0. Signing and pinning mean a compromised mirror cannot feed you a release,
 but they do not protect against the signing key itself being stolen. If that is not a
 trade you want on your hardware, disable it and update by hand — the project works
 exactly the same either way.
+
+### If you installed before v1.4.0
+
+The receiver used to run as root. It now runs as a `cielotrack` system user holding two
+capabilities — `CAP_NET_RAW` and `CAP_NET_ADMIN` — which is all raw HCI and monitor mode
+actually need. Its data moved with it, from the install directory to
+`/var/lib/cielotrack`, because root owns the checkout and an ordinary user cannot create
+files beside it.
+
+One command does both, and it is the same one you already ran:
+
+```bash
+cd /opt/cielotrack-receiver
+sudo ./provision.sh              # add your adapter name if you have one
+```
+
+It creates the user, then stops the receiver, moves `device_credentials.json`,
+`outbox.db` and `amazon_drone_matches.csv` across, checks each copy against the original
+before setting the original aside, and starts it again. Nothing is deleted: the
+originals end up in `/var/lib/cielotrack/pre-migration/`, and you can remove them once
+the receiver has run for a day.
+
+Until you do, the nightly updater will decline v1.4.0 and say why in
+`journalctl -u cielotrack-update`. That is deliberate — it is not recorded as a failed
+release, and your receiver keeps running the version it has.
+
+The identity file is the reason for the care. Losing it is silent: an absent one looks
+exactly like a receiver nobody has claimed yet, so the receiver would register itself as
+a new device and the one on your dashboard would simply stop reporting. Both this
+migration and the receiver itself refuse to run past that state rather than guess.
 
 ### If you installed before v1.1.0
 
@@ -207,6 +242,7 @@ A fresh install needs none of this.
 ## Tests
 
 ```bash
+python3 tests/test_state_paths.py
 python3 tests/test_receiver_state.py
 sudo -v && bash tests/test_update.sh
 ```

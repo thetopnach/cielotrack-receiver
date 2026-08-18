@@ -51,6 +51,35 @@ jobs:
         if: always()
         run: python3 tests/test_receiver_state.py write_failures_are_reported_then_clear
 
+  state-paths:
+    name: running unprivileged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: the capability decides whether sudo is used
+        if: always()
+        run: python3 tests/test_state_paths.py the_capability_decides_whether_sudo_is_used
+      - name: the state directory is resolved in order
+        if: always()
+        run: python3 tests/test_state_paths.py the_state_directory_is_resolved_in_order
+      - name: an identity left behind stops the receiver
+        if: always()
+        run: python3 tests/test_state_paths.py an_identity_left_behind_stops_the_receiver
+      - name: the migration carries everything across
+        if: always()
+        run: python3 tests/test_state_paths.py the_migration_carries_everything_across
+      - name: the migration is safe to run twice
+        if: always()
+        run: python3 tests/test_state_paths.py the_migration_is_safe_to_run_twice
+      - name: a copy that does not verify leaves the original
+        if: always()
+        run: python3 tests/test_state_paths.py a_copy_that_does_not_verify_leaves_the_original
+
   updater:
     name: updater and rollback
     runs-on: ubuntu-latest
