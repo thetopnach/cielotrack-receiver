@@ -67,6 +67,9 @@ jobs:
       - name: the state directory is resolved in order
         if: always()
         run: python3 tests/test_state_paths.py the_state_directory_is_resolved_in_order
+      - name: a blank setting means unset
+        if: always()
+        run: python3 tests/test_state_paths.py a_blank_setting_means_unset
       - name: an identity left behind stops the receiver
         if: always()
         run: python3 tests/test_state_paths.py an_identity_left_behind_stops_the_receiver

@@ -145,6 +145,51 @@ def test_the_state_directory_is_resolved_in_order():
         restore(saved)
 
 
+def test_a_blank_setting_means_unset():
+    """The bug the first canary found, ninety seconds after it was switched on.
+
+    .env.example ships keys present and blank — `STATUS_FILE=` is there as a hint about
+    what can be overridden — and load_dotenv puts that empty string into the
+    environment. os.environ.get(name, default) then hands back "", not the default, so
+    the receiver spent the day writing "" and ".tmp" into a directory it did not own:
+
+        Could not write : PermissionError: [Errno 13] Permission denied: '.tmp'
+
+    Which is worse than it looks. status.json is what update.sh reads to decide whether
+    a release worked, so a receiver that cannot write one rolls back every release it is
+    offered and records each of them as rejected."""
+    print("\na blank setting means unset, not empty")
+    saved = with_environment(STATUS_FILE=None, CIELOTRACK_STATE_DIR=None)
+    try:
+        os.environ["STATUS_FILE"] = ""
+        ok = check("an empty value falls through to the default",
+                   rt.env_or("STATUS_FILE", "/var/lib/cielotrack/status.json")
+                   == "/var/lib/cielotrack/status.json")
+        os.environ["STATUS_FILE"] = "   "
+        ok &= check("and so does one that is only whitespace",
+                    rt.env_or("STATUS_FILE", "/default") == "/default")
+        os.environ["STATUS_FILE"] = "/somewhere/else.json"
+        ok &= check("a real value still wins",
+                    rt.env_or("STATUS_FILE", "/default") == "/somewhere/else.json")
+        del os.environ["STATUS_FILE"]
+        ok &= check("an absent variable is unchanged behaviour",
+                    rt.env_or("STATUS_FILE", "/default") == "/default")
+
+        # The whole point: a stock .env must not move the file out of the state
+        # directory, and must never produce a path that is empty or relative.
+        os.environ["STATUS_FILE"] = ""
+        os.environ["CIELOTRACK_STATE_DIR"] = ""
+        os.environ["STATE_DIRECTORY"] = "/var/lib/cielotrack"
+        resolved = rt.env_or("STATUS_FILE",
+                             os.path.join(rt.state_directory(), "status.json"))
+        ok &= check("so a stock .env resolves inside the state directory",
+                    resolved == "/var/lib/cielotrack/status.json", resolved)
+        return ok
+    finally:
+        os.environ.pop("STATE_DIRECTORY", None)
+        restore(saved)
+
+
 def test_an_identity_left_behind_stops_the_receiver():
     """The one failure that costs something irreversible. Registering again is easy,
     quiet, and leaves the operator's claimed receiver dark."""
@@ -304,6 +349,7 @@ def test_a_copy_that_does_not_verify_leaves_the_original():
 TESTS = [
     test_the_capability_decides_whether_sudo_is_used,
     test_the_state_directory_is_resolved_in_order,
+    test_a_blank_setting_means_unset,
     test_an_identity_left_behind_stops_the_receiver,
     test_the_migration_carries_everything_across,
     test_the_migration_is_safe_to_run_twice,
