@@ -97,8 +97,12 @@ neither the server nor a claimed device, which is the point — those are usuall
 are trying to diagnose.
 
 ```bash
-cat /var/lib/cielotrack/status.json
+sudo cat /var/lib/cielotrack/status.json
 ```
+
+`sudo` because the state directory is `0750` and owned by the `cielotrack` user. It
+holds the upload queue and this receiver's detection history alongside the health file,
+and those are not for every account on the machine.
 
 `radios.problems` is empty when both radios are configured as intended, and names any
 fault the receiver can see in itself — including `detections_not_queued`, which means
