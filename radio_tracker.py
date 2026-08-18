@@ -132,26 +132,69 @@ def privileged(command):
     return list(command) if HAS_NET_RAW else ["sudo"] + list(command)
 
 
-def detect_ble_interface():
-    """The Bluetooth adapter to capture on: BLE_INTERFACE if set, else whichever
-    hciN actually exists.
+BLUETOOTH_SYSFS = "/sys/class/bluetooth"
+
+
+def adapter_is_usb(name, sysfs=BLUETOOTH_SYSFS):
+    """True if this adapter is a USB device rather than the board's own radio.
+
+    Read from the device's subsystem link rather than the driver name, because driver
+    names differ across chipsets and vendors while the subsystem does not.
+    """
+    try:
+        subsystem = os.readlink(os.path.join(sysfs, name, "device", "subsystem"))
+    except OSError:
+        return False
+    return os.path.basename(subsystem) == "usb"
+
+
+def detect_ble_interface(sysfs=BLUETOOTH_SYSFS):
+    """The Bluetooth adapter to capture on: BLE_INTERFACE if set, else the USB one.
 
     Not hardcoded to hci0, because the index is assigned at enumeration and a USB
     dongle that resets comes back as hci1 — at which point a hardcoded name makes the
-    tracker exit on every start with the adapter sitting right there, working. The
-    onboard radio is disabled on this Pi, so the lowest-numbered adapter is the USB
-    one; set BLE_INTERFACE explicitly on a host where that isn't true."""
+    tracker exit on every start with the adapter sitting right there, working.
+
+    Nor simply the lowest index, which is what this used to do. On a stock Raspberry Pi
+    the onboard radio is enabled and takes an index too, so "lowest" is a coin flip
+    decided by enumeration order: unplug the dongle for a moment and the receiver comes
+    back listening on the onboard radio instead. That is not a theoretical risk. It
+    happened on the first receiver ever provisioned by someone other than us, and it
+    was invisible — extended scanning reported active, no fault was raised, and the
+    only symptom was hearing almost nothing.
+
+    So a USB adapter wins. That matches what the hardware requirements actually ask
+    for: Bluetooth 5 extended advertising, which the boards' own radios frequently do
+    not do well, and which is the whole reason a dongle is on the parts list. Set
+    BLE_INTERFACE to override — a host deliberately using its onboard radio while a
+    dongle is plugged in for something else is the one case this gets wrong.
+    """
     override = os.environ.get("BLE_INTERFACE", "").strip()
     if override:
         return override
     try:
-        found = sorted(n for n in os.listdir("/sys/class/bluetooth") if n.startswith("hci"))
+        found = sorted(n for n in os.listdir(sysfs) if n.startswith("hci"))
     except OSError:
         found = []
     if not found:
         print("⚠️ BLE: no Bluetooth adapter found; falling back to hci0")
         return "hci0"
+
+    usb = [n for n in found if adapter_is_usb(n, sysfs)]
+    if usb:
+        if len(found) > 1:
+            others = ", ".join(n for n in found if n != usb[0])
+            print(f"📋 BLE: {len(found)} adapters present; using {usb[0]} (USB) "
+                  f"rather than {others}. Set BLE_INTERFACE to override.")
+        return usb[0]
+
+    # No USB adapter at all: the board's own radio is what there is. Worth saying,
+    # because it is usually a dongle that has fallen out rather than a design choice.
+    print(f"⚠️ BLE: no USB adapter found; using {found[0]}, which is this board's own "
+          f"radio. Bluetooth 5 extended advertising is often unsupported there, and a "
+          f"receiver without it hears very little.")
     return found[0]
+
 
 BLE_INTERFACE = detect_ble_interface()
 # Alfa AWUS036ACM (MT7612U) in monitor mode. Separate radio from the BLE dongle, so

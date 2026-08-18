@@ -115,6 +115,62 @@ def test_the_capability_decides_whether_sudo_is_used():
         return ok
 
 
+def fake_adapters(directory, adapters):
+    """A stand-in for /sys/class/bluetooth. `adapters` maps hciN -> subsystem name."""
+    for name, subsystem in adapters.items():
+        device = os.path.join(directory, name, "device")
+        os.makedirs(device, exist_ok=True)
+        target = os.path.join(directory, "_subsystems", subsystem)
+        os.makedirs(target, exist_ok=True)
+        link = os.path.join(device, "subsystem")
+        if not os.path.islink(link):
+            os.symlink(target, link)
+    return directory
+
+
+def test_the_usb_adapter_wins_over_the_boards_own_radio():
+    """The failure this prevents was invisible. On a stock Raspberry Pi the onboard
+    radio is enabled and takes an hci index, so picking the lowest index is decided by
+    enumeration order — unplug the dongle for a moment and the receiver comes back
+    listening on the onboard radio. Extended scanning reports active, no fault is
+    raised, and the only symptom is hearing almost nothing."""
+    print("\nthe USB adapter wins over the board's own radio")
+    saved = with_environment(BLE_INTERFACE=None)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            # The shape that broke the first externally-provisioned receiver: the
+            # onboard radio enumerated first.
+            both = fake_adapters(os.path.join(tmp, "both"),
+                                 {"hci0": "usb", "hci1": "serial"})
+            ok = check("with the dongle first, the dongle is chosen",
+                       rt.detect_ble_interface(both) == "hci0")
+
+            swapped = fake_adapters(os.path.join(tmp, "swapped"),
+                                    {"hci0": "serial", "hci1": "usb"})
+            ok &= check("and with the onboard radio first, still the dongle",
+                        rt.detect_ble_interface(swapped) == "hci1")
+
+            two_usb = fake_adapters(os.path.join(tmp, "two_usb"),
+                                    {"hci0": "usb", "hci1": "usb"})
+            ok &= check("two dongles falls back to the lowest index",
+                        rt.detect_ble_interface(two_usb) == "hci0")
+
+            onboard = fake_adapters(os.path.join(tmp, "onboard"), {"hci0": "serial"})
+            ok &= check("an onboard-only host still works",
+                        rt.detect_ble_interface(onboard) == "hci0")
+
+            ok &= check("no adapters at all falls back to hci0",
+                        rt.detect_ble_interface(os.path.join(tmp, "absent")) == "hci0")
+
+            # The override is what a host deliberately using its onboard radio needs.
+            os.environ["BLE_INTERFACE"] = "hci1"
+            ok &= check("an explicit BLE_INTERFACE beats all of it",
+                        rt.detect_ble_interface(both) == "hci1")
+            return ok
+    finally:
+        restore(saved)
+
+
 def test_the_state_directory_is_resolved_in_order():
     """systemd hands the directory over in STATE_DIRECTORY. Anything run outside the
     unit — the updater, a migration, someone at a terminal — has to reach the same
@@ -348,6 +404,7 @@ def test_a_copy_that_does_not_verify_leaves_the_original():
 
 TESTS = [
     test_the_capability_decides_whether_sudo_is_used,
+    test_the_usb_adapter_wins_over_the_boards_own_radio,
     test_the_state_directory_is_resolved_in_order,
     test_a_blank_setting_means_unset,
     test_an_identity_left_behind_stops_the_receiver,

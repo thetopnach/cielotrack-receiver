@@ -25,6 +25,15 @@ share them.
 The Pi's built-in Bluetooth works, but a dongle on an extension cable placed away from
 the case usually hears considerably more.
 
+**If you keep the onboard radio enabled, the receiver prefers the USB dongle over it.**
+Both take an `hci` index, and which one gets `hci0` is decided at enumeration — so
+choosing "the first adapter" means a dongle unplugged for a moment can come back with
+the receiver listening to the onboard radio instead. That failure is silent: extended
+scanning reports active, no fault is raised, and the receiver simply stops hearing
+much. `provision.sh` tells you which adapter it will use. To remove the ambiguity for
+good, either pin `BLE_INTERFACE=hci0` in `.env`, or disable the onboard radio with
+`dtoverlay=disable-bt` in `/boot/firmware/config.txt` and reboot.
+
 ## Install
 
 ```bash
