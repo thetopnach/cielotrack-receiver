@@ -28,6 +28,26 @@ INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STATE_DIR = "/var/lib/cielotrack"
 
 
+def env_or(name, default):
+    """An environment variable, where empty counts as unset.
+
+    os.environ.get(name, default) does not do this, and the difference is not academic.
+    .env files ship keys present and blank on purpose — `STATUS_FILE=` is in
+    .env.example as a hint about what can be overridden — and load_dotenv puts that
+    empty string into the environment, so the default never applies. The receiver then
+    spends the day trying to write "" and ".tmp" into whatever its working directory
+    happens to be.
+
+    Found on the canary a minute after it first started, as
+    `Could not write : PermissionError: [Errno 13] Permission denied: '.tmp'`. The
+    status file is what update.sh reads to decide whether a release worked, so a
+    receiver that cannot write one rolls back every release it is offered and records
+    each as rejected.
+    """
+    value = os.environ.get(name, "").strip()
+    return value or default
+
+
 def state_directory():
     """The directory holding the queue, the credentials, the log and the status file.
 
@@ -51,6 +71,9 @@ def state_directory():
     for candidate in (os.environ.get("CIELOTRACK_STATE_DIR", ""),
                       # systemd passes a colon-separated list; ours is the first.
                       os.environ.get("STATE_DIRECTORY", "").split(":")[0]):
+        # .strip() rather than truthiness alone: both of these arrive empty from a
+        # stock .env, and an empty state directory would put every file at the
+        # filesystem root. See env_or above.
         if candidate.strip():
             return candidate.strip()
     if os.path.isdir(DEFAULT_STATE_DIR):
@@ -61,7 +84,7 @@ def state_directory():
 STATE_DIR = state_directory()
 
 # --- MASTER CONFIGURATION ---
-LOG_FILE = os.environ.get("LOG_FILE", os.path.join(STATE_DIR, "amazon_drone_matches.csv"))
+LOG_FILE = env_or("LOG_FILE", os.path.join(STATE_DIR, "amazon_drone_matches.csv"))
 
 # --- 📡 HARDWARE INTERFACE ROUTING ---
 
@@ -192,10 +215,10 @@ def play_audio_alert():
 # has been claimed yet or the central server is reachable — local capture (CSV,
 # audio chime) never depends on the cloud side working. A background thread drains
 # the outbox whenever it can.
-CENTRAL_SERVER_URL = os.environ.get("CENTRAL_SERVER_URL", "http://127.0.0.1:8090")
-CREDENTIALS_FILE = os.environ.get(
-    "CREDENTIALS_FILE", os.path.join(STATE_DIR, "device_credentials.json"))
-OUTBOX_DB = os.environ.get("OUTBOX_DB", os.path.join(STATE_DIR, "outbox.db"))
+CENTRAL_SERVER_URL = env_or("CENTRAL_SERVER_URL", "http://127.0.0.1:8090")
+CREDENTIALS_FILE = env_or("CREDENTIALS_FILE",
+                          os.path.join(STATE_DIR, "device_credentials.json"))
+OUTBOX_DB = env_or("OUTBOX_DB", os.path.join(STATE_DIR, "outbox.db"))
 SYNC_INTERVAL = 15
 # Matches the server's expectation; it treats three missed intervals as offline.
 HEARTBEAT_INTERVAL = 60
@@ -671,14 +694,14 @@ def collect_radio_status():
 # the server had to be reachable and the receiver had to be claimed — precisely the
 # things that are often broken when someone is diagnosing a receiver. This file needs
 # neither.
-STATUS_FILE = os.environ.get("STATUS_FILE", os.path.join(STATE_DIR, "status.json"))
+STATUS_FILE = env_or("STATUS_FILE", os.path.join(STATE_DIR, "status.json"))
 
 # Written by update.sh when a release failed its check here and was rolled back. The
 # receiver is healthy afterwards — it is running the last version that worked — so this
 # is deliberately not a fault. It is news about the *release*, and it is only useful
 # centrally: one receiver refusing a version is a local curiosity, and thirty refusing
 # the same version is the only warning anyone gets that a release should be withdrawn.
-REJECTED_FILE = os.environ.get("REJECTED_FILE", "/etc/cielotrack/rejected")
+REJECTED_FILE = env_or("REJECTED_FILE", "/etc/cielotrack/rejected")
 
 
 def rejected_releases():

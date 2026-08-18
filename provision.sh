@@ -111,6 +111,39 @@ if [[ -x "$INSTALL_DIR/migrate_state.py" ]] \
 fi
 echo
 
+# 0c. The helpers the receiver drives. It shells out to all of these; none is optional
+#     on the path that uses it, and a missing one does not look like a missing one.
+#
+#     Debian 13 split hcidump out of bluez. An install following the old instructions
+#     therefore comes up with every radio configured correctly, extended scanning
+#     active, and no decoding at all — the log says "No such file or directory:
+#     'hcidump'" once every ten seconds and the fleet page says the receiver is online.
+#     That is exactly what the first canary did, which is the argument for checking here
+#     rather than trusting an apt line in a README to stay true.
+missing=()
+command -v hciconfig >/dev/null 2>&1 || missing+=("hciconfig  (apt install bluez)")
+command -v hcitool   >/dev/null 2>&1 || missing+=("hcitool    (apt install bluez)")
+command -v hcidump   >/dev/null 2>&1 || missing+=("hcidump    (apt install bluez-hcidump)")
+if [[ -n "$IFACE" ]]; then
+    command -v iw >/dev/null 2>&1 || missing+=("iw         (apt install iw)")
+fi
+
+if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "  ✗ These are missing, and the receiver cannot work without them:" >&2
+    printf '      %s\n' "${missing[@]}" >&2
+    echo >&2
+    echo "    Install them and run this again. Nothing above has been changed." >&2
+    exit 1
+fi
+
+# iw is only used to report the Wi-Fi radio's state when no adapter is configured, so
+# its absence is worth saying and not worth stopping for.
+if [[ -z "$IFACE" ]] && ! command -v iw >/dev/null 2>&1; then
+    echo "  note: iw is not installed. Nothing needs it on a BLE-only receiver, but"
+    echo "        you will need it (apt install iw) when you add a Wi-Fi adapter."
+fi
+echo
+
 # Sections 1-3 configure a capture adapter, so they are skipped entirely when there is
 # not one yet. What they leave behind — the template unit, the udev rule — is derived
 # from the adapter, so writing it now with nothing to point at would only produce a

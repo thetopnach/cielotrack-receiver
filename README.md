@@ -28,15 +28,21 @@ the case usually hears considerably more.
 ## Install
 
 ```bash
-sudo apt update && sudo apt install -y python3-pip bluez aircrack-ng git
+sudo apt update && sudo apt install -y python3-pip bluez bluez-hcidump iw git
 sudo git clone https://github.com/thetopnach/cielotrack-receiver.git /opt/cielotrack-receiver
 cd /opt/cielotrack-receiver
 sudo pip3 install -r requirements.txt --break-system-packages
 sudo cp .env.example .env
 ```
 
+`bluez-hcidump` is its own package on Debian 13 and later, and it is the one that
+matters: without it every radio configures correctly, extended scanning starts, and
+nothing is ever decoded. `provision.sh` checks for all of them before it changes
+anything, so you will be told rather than left to find out from a quiet sky.
+
 Edit `.env` and set `BASE_LAT` / `BASE_LON` to where the receiver sits, and
-`WIFI_INTERFACE` to your monitor-capable adapter.
+`WIFI_INTERFACE` to your monitor-capable adapter — or leave it empty on a BLE-only
+receiver.
 
 Then provision the host state the receiver needs but cannot create for itself — the
 user it runs as, the directory its data lives in, monitor mode, protection from
