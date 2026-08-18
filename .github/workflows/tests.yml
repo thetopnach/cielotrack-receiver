@@ -64,6 +64,9 @@ jobs:
       - name: the capability decides whether sudo is used
         if: always()
         run: python3 tests/test_state_paths.py the_capability_decides_whether_sudo_is_used
+      - name: the usb adapter wins over the board's own radio
+        if: always()
+        run: python3 tests/test_state_paths.py the_usb_adapter_wins_over_the_boards_own_radio
       - name: the state directory is resolved in order
         if: always()
         run: python3 tests/test_state_paths.py the_state_directory_is_resolved_in_order

@@ -144,6 +144,41 @@ if [[ -z "$IFACE" ]] && ! command -v iw >/dev/null 2>&1; then
 fi
 echo
 
+# 0d. Which Bluetooth adapter the receiver will end up on. Worth saying out loud at
+#     setup rather than leaving it to be discovered: on a stock Raspberry Pi the
+#     onboard radio is enabled and takes an hci index of its own, and a receiver that
+#     silently picks it reports every radio healthy while hearing almost nothing.
+adapters=()
+for path in /sys/class/bluetooth/hci*; do
+    [[ -e "$path" ]] || continue
+    adapters+=("$(basename "$path")")
+done
+usb_adapters=()
+for adapter in "${adapters[@]}"; do
+    subsystem="$(basename "$(readlink -f "/sys/class/bluetooth/$adapter/device/subsystem" 2>/dev/null)" 2>/dev/null)"
+    [[ "$subsystem" == "usb" ]] && usb_adapters+=("$adapter")
+done
+
+if [[ ${#adapters[@]} -eq 0 ]]; then
+    echo "  ✗ No Bluetooth adapter found at all. The receiver cannot capture without one." >&2
+    exit 1
+elif [[ ${#usb_adapters[@]} -eq 0 ]]; then
+    echo "  ! Only this board's own radio (${adapters[*]}) — no USB adapter."
+    echo "    Bluetooth 5 extended advertising is often unsupported there, and without"
+    echo "    it a receiver misses most drones. A BT5 dongle is on the parts list for"
+    echo "    this reason."
+elif [[ ${#adapters[@]} -gt 1 ]]; then
+    echo "  Bluetooth: using ${usb_adapters[0]} (USB) of ${#adapters[@]} adapters present"
+    echo "    The others are this board's own radio. The receiver prefers USB, but the"
+    echo "    index each one gets is decided at enumeration, so pin it if you want"
+    echo "    certainty: BLE_INTERFACE=${usb_adapters[0]} in .env — or disable the"
+    echo "    onboard radio entirely with dtoverlay=disable-bt in"
+    echo "    /boot/firmware/config.txt, which is what removes the ambiguity for good."
+else
+    echo "  Bluetooth: ${usb_adapters[0]} (USB)"
+fi
+echo
+
 # Sections 1-3 configure a capture adapter, so they are skipped entirely when there is
 # not one yet. What they leave behind — the template unit, the udev rule — is derived
 # from the adapter, so writing it now with nothing to point at would only produce a
