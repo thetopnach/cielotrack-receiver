@@ -34,7 +34,16 @@ PINNED_SIGNERS="${CONFIG_DIR}/allowed_signers"
 OPT_OUT="${CONFIG_DIR}/no-auto-update"
 CHANNEL_FILE="${CONFIG_DIR}/channel"
 REJECTED_FILE="${CONFIG_DIR}/rejected"
-STATUS_FILE="${CIELOTRACK_STATUS_FILE:-${INSTALL_DIR}/status.json}"
+# The same ladder radio_tracker walks, minus systemd's STATE_DIRECTORY — this runs from
+# its own timer, not from the receiver's unit, so it has to work the directory out
+# rather than be handed it. Getting this wrong is not loud: the health check would look
+# for a status file in the old place, never find one this build wrote, and roll back
+# every release forever while the receiver was perfectly healthy.
+STATE_DIR="${CIELOTRACK_STATE_DIR:-}"
+if [[ -z "$STATE_DIR" ]]; then
+    if [[ -d /var/lib/cielotrack ]]; then STATE_DIR=/var/lib/cielotrack; else STATE_DIR="$INSTALL_DIR"; fi
+fi
+STATUS_FILE="${CIELOTRACK_STATUS_FILE:-${STATE_DIR}/status.json}"
 # Two heartbeats plus warmup. Long enough that a healthy receiver has certainly
 # reported, short enough that a broken one is rolled back inside the quiet window.
 HEALTH_TIMEOUT="${CIELOTRACK_HEALTH_TIMEOUT:-180}"
@@ -60,9 +69,15 @@ git rev-parse --git-dir >/dev/null 2>&1 || fail "$INSTALL_DIR is not a git check
 
 # Refuse to touch a checkout with local edits. Someone is mid-debug, and silently
 # stashing their work in the middle of the night is not ours to do.
-if [[ -n "$(git status --porcelain -- ':!status.json' ':!*.db*' ':!.env' 2>/dev/null)" ]]; then
+#
+# The receiver's own files are excluded. .gitignore covers them too, but this list is
+# what actually decides, and an install whose data still sits beside the code would
+# otherwise look permanently "modified" — so the one release that moves that data out
+# would be the one release this could never install.
+OURS=(':!status.json' ':!*.db*' ':!.env' ':!device_credentials.json' ':!*.csv')
+if [[ -n "$(git status --porcelain -- "${OURS[@]}" 2>/dev/null)" ]]; then
     log "local modifications present — leaving this checkout alone"
-    git status --short -- ':!status.json' ':!*.db*' ':!.env' | sed 's/^/    /'
+    git status --short -- "${OURS[@]}" | sed 's/^/    /'
     exit 0
 fi
 
@@ -199,6 +214,44 @@ trap cleanup EXIT
 # --- apply -------------------------------------------------------------------------
 log "checking out $LATEST"
 git checkout --quiet --force "$LATEST" || fail "could not check out $LATEST"
+
+# --- can this host actually run it -------------------------------------------------
+# A release may need host state a checkout cannot create for itself: the service user,
+# or the receiver's data moved out of the install directory. Installing it anyway would
+# be *safe* — the health check fails, the rollback puts everything back — but it would
+# also record the release as rejected, which is a permanent verdict on a receiver that
+# has simply not been prepared yet, and nothing would tell the operator what to do. So
+# the check happens before anything is changed, and standing down is not a rejection.
+unmet_prerequisite() {
+    local unit="${SERVICE}.service" wanted_user state_name
+    [[ -f "$unit" ]] || return 1
+
+    wanted_user="$(sed -n 's/^[[:space:]]*User=//p' "$unit" | tail -1)"
+    if [[ -n "$wanted_user" ]] && ! id -u "$wanted_user" >/dev/null 2>&1; then
+        echo "it runs as '$wanted_user', and there is no such user on this host"
+        echo "    sudo $INSTALL_DIR/provision.sh"
+        return 0
+    fi
+
+    # Read from the unit rather than assumed, so this keeps telling the truth if the
+    # directory is ever renamed.
+    state_name="$(sed -n 's/^[[:space:]]*StateDirectory=//p' "$unit" | tail -1)"
+    if [[ -n "$state_name" && -f "$INSTALL_DIR/device_credentials.json" \
+          && ! -f "/var/lib/${state_name}/device_credentials.json" ]]; then
+        echo "this receiver's identity is still in $INSTALL_DIR, where the service user cannot read it"
+        echo "    sudo $INSTALL_DIR/migrate_state.py --apply"
+        return 0
+    fi
+    return 1
+}
+
+if reason="$(unmet_prerequisite)"; then
+    log "$LATEST needs something this receiver does not have yet:"
+    while IFS= read -r line; do log "  $line"; done <<<"$reason"
+    log "staying on $CURRENT_DESC — nothing is wrong with the release, so it is not recorded as rejected"
+    git checkout --quiet --force "$CURRENT_COMMIT" || log "WARNING: could not restore the previous commit"
+    exit 0
+fi
 
 if [[ -f requirements.txt ]] && ! git diff --quiet "$CURRENT_COMMIT" HEAD -- requirements.txt; then
     log "dependencies changed, installing"

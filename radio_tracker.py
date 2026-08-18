@@ -23,20 +23,90 @@ load_dotenv()
 # (Basic ID, Location, System, ...), so fields accumulate here across captures.
 drone_state = {}
 
+# --- WHERE THIS RECEIVER'S OWN DATA LIVES ---
+INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_STATE_DIR = "/var/lib/cielotrack"
+
+
+def state_directory():
+    """The directory holding the queue, the credentials, the log and the status file.
+
+    These used to sit beside the code, which works only for as long as the service is
+    root and root owns the checkout. It cannot survive the service becoming an ordinary
+    user: the updater runs as root and owns the install directory, so the service would
+    be unable to *create* files there — and the writes that fail first are the ones that
+    make new files, `outbox.db-wal` and `status.json.tmp`. That is not a prediction. It
+    is the shape of the outage on 2026-08-15, where capture ran perfectly for seventeen
+    hours while every detection failed to queue and every radio reported healthy.
+
+    Resolution order, most explicit first:
+
+      CIELOTRACK_STATE_DIR  named by hand, and by the tests
+      STATE_DIRECTORY       set by systemd from StateDirectory=, which also creates the
+                            directory and hands it to the service user
+      /var/lib/cielotrack   its presence means an install that has been migrated, so a
+                            tool run outside systemd reads the same files the service does
+      the install directory an install that has not been migrated, behaving as before
+    """
+    for candidate in (os.environ.get("CIELOTRACK_STATE_DIR", ""),
+                      # systemd passes a colon-separated list; ours is the first.
+                      os.environ.get("STATE_DIRECTORY", "").split(":")[0]):
+        if candidate.strip():
+            return candidate.strip()
+    if os.path.isdir(DEFAULT_STATE_DIR):
+        return DEFAULT_STATE_DIR
+    return INSTALL_DIR
+
+
+STATE_DIR = state_directory()
+
 # --- MASTER CONFIGURATION ---
-LOG_FILE = "amazon_drone_matches.csv"
+LOG_FILE = os.environ.get("LOG_FILE", os.path.join(STATE_DIR, "amazon_drone_matches.csv"))
 
 # --- 📡 HARDWARE INTERFACE ROUTING ---
 
-def privileged(command):
-    """A command list, with sudo prepended only when we are not already root.
+# CAP_NET_RAW is bit 13 of the capability mask, CAP_NET_ADMIN bit 12 (linux/capability.h).
+CAP_NET_RAW = 13
 
-    The service runs as root, where sudo is redundant — and worse than redundant under
-    NoNewPrivileges, which blocks the setuid sudo needs and made every hcidump and
-    hcitool call fail. Someone running this by hand as a normal user still gets the
-    prompt they expect.
+
+def effective_capabilities(status_path="/proc/self/status"):
+    """This process's effective capability set as an integer, or 0 if it cannot be read.
+
+    Zero is the safe answer to fall back on: it means "assume we hold nothing", which
+    costs a sudo we may not have needed rather than skipping one we did. The path is an
+    argument so this can be read against a known file rather than only against whatever
+    the machine running the tests happens to grant.
     """
-    return list(command) if os.geteuid() == 0 else ["sudo"] + list(command)
+    try:
+        with open(status_path) as handle:
+            for line in handle:
+                if line.startswith("CapEff:"):
+                    return int(line.split()[1], 16)
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+# Capabilities do not change under this process, so this is settled once, at import.
+HAS_NET_RAW = bool(effective_capabilities() & (1 << CAP_NET_RAW)) or os.geteuid() == 0
+
+
+def privileged(command):
+    """A command list, with sudo prepended only when we do not already hold the
+    capability these helpers need.
+
+    The test is CAP_NET_RAW rather than "am I root", because those stopped being the
+    same question when the service moved to its own user. Running with
+    AmbientCapabilities=CAP_NET_RAW is not root and never will be, but it is exactly
+    what hciconfig, hcitool and hcidump want — and prepending sudo there fails twice
+    over: the user has no sudoers entry, and NoNewPrivileges blocks the setuid bit sudo
+    needs anyway. That combination is what made every helper call fail silently when
+    this was keyed on euid.
+
+    euid 0 is still honoured for the case where /proc cannot be read at all, and someone
+    running this by hand as an ordinary user still gets the sudo prompt they expect.
+    """
+    return list(command) if HAS_NET_RAW else ["sudo"] + list(command)
 
 
 def detect_ble_interface():
@@ -123,8 +193,9 @@ def play_audio_alert():
 # audio chime) never depends on the cloud side working. A background thread drains
 # the outbox whenever it can.
 CENTRAL_SERVER_URL = os.environ.get("CENTRAL_SERVER_URL", "http://127.0.0.1:8090")
-CREDENTIALS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "device_credentials.json")
-OUTBOX_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outbox.db")
+CREDENTIALS_FILE = os.environ.get(
+    "CREDENTIALS_FILE", os.path.join(STATE_DIR, "device_credentials.json"))
+OUTBOX_DB = os.environ.get("OUTBOX_DB", os.path.join(STATE_DIR, "outbox.db"))
 SYNC_INTERVAL = 15
 # Matches the server's expectation; it treats three missed intervals as offline.
 HEARTBEAT_INTERVAL = 60
@@ -174,6 +245,42 @@ _credentials = None
 _credentials_lock = threading.Lock()
 
 
+def stranded_credentials():
+    """A device identity left behind in the install directory. Returns its path, or None.
+
+    Only possible on an install whose state has moved but whose credential file did not
+    come with it — an interrupted migration, or a hand-built unit that sets
+    StateDirectory without moving anything.
+
+    It is worth a check of its own because this is the one file whose loss is silent.
+    Absent credentials are an ordinary state — a receiver that has never been claimed —
+    so nothing below would report a problem: the receiver would generate a fresh device
+    id, register as a stranger, and leave the operator with a dashboard pointing at a
+    receiver that has stopped reporting and a new one nobody recognises. The old
+    identity is still on disk the whole time.
+    """
+    if STATE_DIR == INSTALL_DIR:
+        return None
+    legacy = os.path.join(INSTALL_DIR, "device_credentials.json")
+    if os.path.exists(CREDENTIALS_FILE) or not os.path.exists(legacy):
+        return None
+    return legacy
+
+
+def refuse_if_credentials_stranded():
+    """Stop rather than claim a new identity. Loud, reversible, and the data is intact."""
+    legacy = stranded_credentials()
+    if legacy is None:
+        return
+    print(f"✗ This receiver's identity is at {legacy}, but its state directory is "
+          f"{STATE_DIR}.")
+    print("  Starting now would register this receiver as a new device and orphan the "
+          "one you claimed.")
+    print(f"  Move it across first:  sudo ./migrate_state.py "
+          f"--state-dir {STATE_DIR} --apply")
+    raise SystemExit(1)
+
+
 def get_credentials():
     """The one credential object every thread shares.
 
@@ -196,6 +303,7 @@ def load_or_create_credentials():
         with open(CREDENTIALS_FILE) as f:
             creds = json.load(f)
     else:
+        refuse_if_credentials_stranded()
         creds = {"device_id": str(uuid.uuid4()), "bootstrap_secret": secrets.token_urlsafe(32), "api_key": None}
         save_credentials(creds)
     return creds
@@ -563,8 +671,7 @@ def collect_radio_status():
 # the server had to be reachable and the receiver had to be claimed — precisely the
 # things that are often broken when someone is diagnosing a receiver. This file needs
 # neither.
-STATUS_FILE = os.environ.get(
-    "STATUS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "status.json"))
+STATUS_FILE = os.environ.get("STATUS_FILE", os.path.join(STATE_DIR, "status.json"))
 
 # Written by update.sh when a release failed its check here and was rolled back. The
 # receiver is healthy afterwards — it is running the last version that worked — so this
@@ -1394,10 +1501,20 @@ def stop_stray_scanners():
         if not targeted:
             continue
         try:
-            subprocess.run(["kill", pid], capture_output=True, timeout=5)
-            print(f"🧹 Stopped stray scanner on {BLE_INTERFACE}: pid {pid}")
+            killed = subprocess.run(["kill", pid], capture_output=True, text=True, timeout=5)
         except Exception:
-            pass
+            continue
+        if killed.returncode == 0:
+            print(f"🧹 Stopped stray scanner on {BLE_INTERFACE}: pid {pid}")
+        else:
+            # Said out loud rather than swallowed, because a service that is no longer
+            # root cannot signal a root-owned process — and that is exactly what is
+            # left behind by an install that has just switched users. The stray holds
+            # the adapter, our capture hears nothing, and the only clue used to be a
+            # line claiming we had stopped it.
+            detail = (killed.stderr or "").strip() or "not permitted"
+            print(f"⚠️ Stray scanner on {BLE_INTERFACE} (pid {pid}) is not ours to stop: "
+                  f"{detail} — clear it with: sudo kill {pid}")
 
 
 def ble_capture_loop():
@@ -1425,7 +1542,16 @@ def ble_capture_loop():
 
 def main():
     print("🛰️ Booting High-Performance Tri-Core BLE Core...")
+    # Before anything opens a socket or claims an identity: an interrupted migration is
+    # cheap to fix and expensive to run past.
+    refuse_if_credentials_stranded()
     print(f"📋 BLE interface: {BLE_INTERFACE}")
+    # Printed because "it runs as root" stopped being a safe assumption, and the two
+    # ways this goes wrong — no capability, or state in a directory we cannot write —
+    # are both invisible until a write fails much later.
+    print(f"📋 Running as uid {os.geteuid()}, "
+          f"{'holding CAP_NET_RAW' if HAS_NET_RAW else 'no CAP_NET_RAW (helpers via sudo)'}")
+    print(f"📋 State directory: {STATE_DIR}")
     radio_state["started_at"] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
     threading.Thread(target=central_sync_loop, daemon=True).start()

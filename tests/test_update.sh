@@ -188,6 +188,65 @@ contains "refuses an unsigned tag" "$out" "did not verify"
 check "stayed on the last good release" "$(cd "$INSTALL" && git describe --tags)" "v1.1.0"
 
 echo
+echo "a release this host is not prepared for stands down"
+# Installing it anyway would be safe — the health check fails and the rollback puts
+# everything back — but it would also record the release as rejected, which is a
+# permanent verdict on a receiver that has simply not had provision.sh run on it. The
+# operator would get a receiver stuck on an old version and no explanation anywhere.
+cd "$WORK" || exit 1
+cat > cielotrack-selftest.service <<'EOF'
+[Service]
+User=cielotrack-nobody-here
+ExecStart=/bin/true
+EOF
+echo "v5 payload" > payload.txt
+git add -A; git commit --quiet -m "v5 runs as its own user"
+git tag -s v1.5.0 -m "needs a service user"
+git push --quiet origin HEAD:main --tags
+
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh 2>&1)"
+contains "names the user that is missing" "$out" "cielotrack-nobody-here"
+contains "points at the command that fixes it" "$out" "provision.sh"
+contains "and is explicit that this is not a bad release" "$out" "not recorded as rejected"
+check "stayed on the last good release" "$(cd "$INSTALL" && git describe --tags)" "v1.1.0"
+lacks "the new unit was not installed" "$(cat "$UNIT" 2>/dev/null)" "cielotrack-nobody-here"
+lacks "and it was not recorded as rejected" "$(cat "$CONFIG/rejected" 2>/dev/null)" "v1.5.0"
+
+echo
+echo "a release that moves the receiver's data stands down until it has moved"
+# The identity is the reason this check exists at all: starting a receiver whose
+# credentials it cannot read makes it register as a new device, and the operator's
+# claimed receiver goes dark with nothing reporting why.
+cd "$WORK" || exit 1
+cat > cielotrack-selftest.service <<'EOF'
+[Service]
+User=root
+StateDirectory=cielotrack-selftest
+ExecStart=/bin/true
+EOF
+git add -A; git commit --quiet -m "v6 keeps state in /var/lib"
+git tag -s v1.6.0 -m "moves state out of the install directory"
+git push --quiet origin HEAD:main --tags
+
+sudo tee "$INSTALL/device_credentials.json" >/dev/null <<<'{"device_id": "dev-selftest"}'
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh 2>&1)"
+contains "says the identity has not moved" "$out" "identity is still in"
+contains "points at the migration" "$out" "migrate_state.py"
+check "stayed on the last good release" "$(cd "$INSTALL" && git describe --tags)" "v1.1.0"
+
+# With the state where the new unit expects it, the same release installs.
+sudo mkdir -p /var/lib/cielotrack-selftest
+sudo cp "$INSTALL/device_credentials.json" /var/lib/cielotrack-selftest/
+out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" bash -c '
+  ( while true; do sleep 2; echo "{\"radios\":{\"problems\":[]}}" > '"$INSTALL"'/status.json; done ) &
+  writer=$!
+  ./update.sh 2>&1
+  kill $writer 2>/dev/null')"
+contains "once it has moved, the release installs" "$out" "verified healthy"
+check "and the checkout is on it" "$(cd "$INSTALL" && git describe --tags)" "v1.6.0"
+sudo rm -rf /var/lib/cielotrack-selftest
+
+echo
 echo "opt-out is honoured"
 sudo touch "$CONFIG/no-auto-update"
 out="$(cd "$INSTALL" && sudo "${ENVVARS[@]}" ./update.sh 2>&1)"

@@ -15,30 +15,44 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
-# --- hardening ---
-# This runs as root because raw HCI and monitor mode need CAP_NET_RAW and
-# CAP_NET_ADMIN, and the helpers it drives (hciconfig, hcitool, hcidump, iw) are not
-# capability-aware. What follows bounds what root can reach, so a fault in a frame
-# parser cannot become a fault in the rest of the machine.
+# --- who this runs as ---
+# Not root. Decoding Remote ID means parsing frames from anyone within radio range, in
+# a process that used to be able to do anything on the machine; the two things it
+# actually needs are a raw socket and the ability to configure an interface, and those
+# are grantable on their own.
 #
-# If you install outside /opt, update ReadWritePaths. An /opt install owned by root
-# needs nothing else. Installing under a home directory needs three more changes, and
-# getting two of them wrong fails in ways that do not look like permissions at all:
-#
-#   - drop ProtectHome=yes, or the install directory is not visible to the service;
-#   - add CAP_DAC_READ_SEARCH, or root cannot traverse into an owner-only home;
-#   - add CAP_DAC_OVERRIDE, or root cannot *create* files in a directory it does not
-#     own. This is the one that bites. Capture, decoding and alerting all keep working;
-#     what breaks is every write that makes a new file — SQLite in WAL mode creating
-#     outbox.db-wal, and the status file's status.json.tmp. Detections then fail to
-#     queue with "attempt to write a readonly database" while the heartbeat stays
-#     green and radios.problems stays empty. We lost 17 hours of uploads to exactly
-#     this before writing it down.
+# The user is created by provision.sh. AmbientCapabilities is what makes this work
+# where a plain unprivileged user would not: the capabilities are in the process's
+# *effective* set from the first instruction, so hciconfig, hcitool, hcidump and iw
+# behave exactly as they did under root. radio_tracker checks for CAP_NET_RAW rather
+# than for uid 0 before deciding whether to reach for sudo — keyed on the wrong one it
+# would prepend sudo to every helper call, which fails twice over here: no sudoers
+# entry, and NoNewPrivileges blocks the setuid bit sudo needs.
+User=cielotrack
+Group=cielotrack
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_KILL
+
+# --- where its own data lives ---
+# /var/lib/cielotrack, created and chowned by systemd. Not the install directory: the
+# updater runs as root and owns the checkout, so a service user could read the code but
+# never create a file beside it — and the writes that fail first are the ones that make
+# new files, outbox.db-wal and status.json.tmp. Capture keeps working while every
+# detection fails to queue, which is the 2026-08-15 outage exactly.
+#
+# Existing installs must move their data across before taking this unit; migrate_state.py
+# does it, and update.sh refuses the release until it has been done.
+StateDirectory=cielotrack
+StateDirectoryMode=0750
+
+# --- what it can reach ---
+# ProtectHome=yes is why /opt is the documented install location. Installing under a
+# home directory now needs that dropped *and* the checkout readable by the cielotrack
+# user, which means opening up a directory that is 0700 for good reasons. Put it in
+# /opt.
 ProtectSystem=full
 ProtectHome=yes
-ReadWritePaths=/opt/cielotrack-receiver
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
@@ -46,6 +60,7 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
+UMask=0077
 # AF_BLUETOOTH for HCI, AF_PACKET for monitor-mode capture, AF_NETLINK for iw.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET AF_BLUETOOTH
 
