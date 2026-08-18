@@ -277,7 +277,7 @@ if [[ -n "$IFACE" ]]; then
     echo "  iw dev $IFACE info | grep -E 'type|channel'     # expect: monitor, channel 6"
 fi
 echo "  systemctl status $SERVICE"
-echo "  cat $STATE_DIR/status.json                      # radios.problems should be []"
+echo "  sudo cat $STATE_DIR/status.json                 # radios.problems should be []"
 echo "  sudo $INSTALL_DIR/update.sh --check             # what a nightly run would do"
 echo "  systemctl list-timers cielotrack-update         # when it next runs"
 
