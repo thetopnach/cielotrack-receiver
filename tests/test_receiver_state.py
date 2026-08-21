@@ -39,7 +39,10 @@ def isolate():
     rt.lookup_identity = lambda *a, **k: None
     for store in (rt.drone_state, rt.key_to_macs, rt.key_to_msg_count, rt.key_to_rssi,
                   rt.transport_mac_to_key, rt.pending_alert_timers,
-                  rt.pending_alert_protocols, rt.sent_alert_tracker):
+                  rt.pending_alert_protocols, rt.sent_alert_tracker,
+                  # getattr so this file still runs against a build without it, and the
+                  # assertion reports the bug rather than dying on an AttributeError.
+                  getattr(rt, "key_to_position_at", {})):
         store.clear()
 
     written = []
@@ -361,7 +364,56 @@ def test_the_status_file_still_publishes_iso_timestamps():
         rt.STATUS_FILE = original
 
 
+def test_the_row_is_stamped_when_its_position_was_heard():
+    """A contact is logged once per cooldown, carrying the telemetry it accumulated over
+    the whole pass — so its position is the last one heard, not the first.
+
+    Stamping that with the contact's first frame paired a coordinate from the end of a
+    pass with a clock reading from the start of it: the row claimed the aircraft was
+    somewhere it would not reach for several more seconds.
+
+    Invisible on a receiver working alone, because nothing contradicts it. It showed up
+    where a second receiver reported the same passes per advertisement — those rows sat
+    40-68% of the way through by time but 50-138% of the way by position, two of them
+    past the far end of the other receiver's track. The drawn line jumped forward to the
+    stray row and back, twice per row.
+    """
+    print("a row is stamped when its position was heard")
+    from datetime import datetime, timezone
+    isolate()
+    # The grace period has to outlast the movement below, or the row is written before
+    # the second position ever arrives and the test proves nothing.
+    rt.PENDING_ALERT_GRACE_SECONDS = 1.0
+    rt.ALERT_COOLDOWN = 30
+    mac = "CC:F9:57:9E:72:99"
+
+    stamps = []
+    rt.enqueue_detection = lambda _mac, _proto, _tel, detected_at, *a, **k: stamps.append(detected_at)
+
+    started = time.time()
+    rt.register_detection(mac, {"uas_id": "1786501099", "lat": 33.000, "lon": -96.650},
+                          "BLE", 1, -88)
+    time.sleep(0.4)
+    rt.register_detection(mac, {"uas_id": "1786501099", "lat": 33.010, "lon": -96.660},
+                          "BLE", 1, -87)
+    moved_at = time.time()
+    time.sleep(1.0)
+
+    ok = check("the pass is recorded once", len(stamps) == 1, f"{len(stamps)} rows")
+    if not stamps:
+        return False
+    stamped = datetime.strptime(stamps[0], '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+    ok &= check("it is not stamped when the contact began",
+                stamped.timestamp() - started > 0.3,
+                f"{stamped.timestamp() - started:.2f}s after the first frame")
+    ok &= check("it is stamped when the position it carries was heard",
+                abs(stamped.timestamp() - moved_at) < 0.35,
+                f"{abs(stamped.timestamp() - moved_at):.2f}s from the last position")
+    return ok
+
+
 TESTS = [
+    test_the_row_is_stamped_when_its_position_was_heard,
     test_rekey_during_grace_period,
     test_expired_cooldown_does_not_suppress,
     test_cooldown_still_suppresses_while_live,
