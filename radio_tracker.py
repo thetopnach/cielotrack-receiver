@@ -1066,6 +1066,10 @@ key_to_rssi = {}
 # closest approach.
 key_to_first_seen = {}
 key_to_last_seen = {}
+# When the position a contact currently carries was decoded. Separate from last-seen,
+# which moves on any frame: a Basic ID arriving after the final Location would drag the
+# stamp past the coordinate it is meant to describe.
+key_to_position_at = {}
 
 def resolve_state_key(transport_mac):
     return transport_mac_to_key.get(transport_mac, transport_mac)
@@ -1107,6 +1111,10 @@ def _merge_state_locked(transport_mac, decoded):
         if last is not None:
             prior = key_to_last_seen.get(uas_id)
             key_to_last_seen[uas_id] = last if prior is None else max(prior, last)
+        moved = key_to_position_at.pop(key, None)
+        if moved is not None:
+            prior = key_to_position_at.get(uas_id)
+            key_to_position_at[uas_id] = moved if prior is None else max(prior, moved)
         carried = key_to_rssi.pop(key, None)
         if carried is not None:
             existing = key_to_rssi.get(uas_id)
@@ -1193,6 +1201,8 @@ def register_detection(transport_mac, decoded, protocol, message_count=1, rssi_d
         key = merge_state(transport_mac, decoded)
         key_to_first_seen.setdefault(key, received_at)
         key_to_last_seen[key] = received_at
+        if decoded.get("lat") is not None:
+            key_to_position_at[key] = received_at
         key_to_msg_count[key] = key_to_msg_count.get(key, 0) + message_count
         if rssi_dbm is not None:
             previous = key_to_rssi.get(key)
@@ -1435,10 +1445,28 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
     dedup_key = dedup_key or icao_hex
     # UTC ISO format matches the DroneSight cloud timestamps so the dashboard can
     # convert both consistently to the viewer's local time.
-    # When the first frame of this contact arrived, not when the grace period expired.
-    # Falls back to now only if nothing recorded a receive time, which would mean this
-    # was reached outside the normal capture path.
-    heard_at = key_to_first_seen.get(dedup_key)
+    # When the position this row carries was decoded — not when the contact began.
+    #
+    # A contact is logged once per cooldown and carries the telemetry it accumulated over
+    # the whole pass, so its coordinate is the last one heard. Stamping that with the
+    # first frame's time paired a position from the end of a pass with a clock reading
+    # from the start of it, and the row claimed the aircraft was somewhere it would not
+    # reach for several more seconds.
+    #
+    # Nothing on one receiver contradicts it. It surfaced only where a second receiver
+    # reported the same passes per advertisement: across four of them these rows sat
+    # 40-68% of the way through by time but 50-138% of the way by position, two of them
+    # past the far end of the other receiver's track. The drawn line jumped forward to
+    # the stray row and back again, twice per row.
+    #
+    # A row with no position keeps first-seen: it has nothing to be inconsistent with,
+    # and that is still the honest answer for when it was heard. Falls back to now only
+    # if nothing recorded a receive time, which would mean this was reached outside the
+    # normal capture path.
+    heard_at = (key_to_position_at.get(dedup_key)
+                if telemetry.get("lat") is not None else None)
+    if heard_at is None:
+        heard_at = key_to_first_seen.get(dedup_key)
     stamped = (datetime.fromtimestamp(heard_at, timezone.utc) if heard_at
                else datetime.now(timezone.utc))
     timestamp = stamped.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
@@ -1456,6 +1484,7 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
         key_to_rssi.pop(tracked_key, None)
         key_to_first_seen.pop(tracked_key, None)
         key_to_last_seen.pop(tracked_key, None)
+        key_to_position_at.pop(tracked_key, None)
         for mac in key_to_macs.pop(tracked_key, set()):
             transport_mac_to_key.pop(mac, None)
 
