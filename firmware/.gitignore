@@ -1,0 +1,24 @@
+build/
+esp32/build/
+esp32/sdkconfig
+esp32/sdkconfig.old
+esp32/managed_components/
+# esp32/dependencies.lock is deliberately NOT ignored. It pins the exact versions the
+# component manager resolved, and firmware built from the same commit should contain the
+# same code — "~1.2.0" would otherwise let two boards flashed a week apart carry
+# different provisioning stacks, which is not something the version string on the fleet
+# page could tell you.
+esp32/main/secrets.h
+# The per-role variants too. The pair is built from one source tree with two different
+# configurations — secrets.ble.h defines the master, secrets.wifi.h adds
+# CIELOTRACK_ROLE_WIFI and CIELOTRACK_SENSOR_ONLY — and one is copied over secrets.h to
+# choose which image is built.
+#
+# They exist because editing secrets.h in place is what silently dropped the peer
+# configuration from a master build once, compiling out the Wi-Fi forwarding path while
+# the master went on reporting itself perfectly healthy. Keeping both files means the
+# choice is a copy rather than an edit.
+#
+# Ignored for the obvious reason: they carry the same device keys and network credentials
+# secrets.h does.
+esp32/main/secrets.*.h

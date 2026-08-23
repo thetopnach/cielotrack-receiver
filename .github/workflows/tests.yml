@@ -74,6 +74,28 @@ jobs:
         if: always()
         run: python3 tests/test_odid_vectors.py
 
+  firmware:
+    name: C decoder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: build and run the C tests
+        run: make -C firmware test
+      # The point of keeping two implementations is that they agree. These fuzz thousands
+      # of random messages through both and compare every field, which is how the
+      # rounding-tie disagreement was found -- no case anyone thought to write caught it.
+      - name: the C and Python decoders agree
+        if: always()
+        run: python3 tests/test_c_matches_python.py
+      - name: the C and Python packers agree
+        if: always()
+        run: python3 tests/test_pack_matches_python.py
+
   state-paths:
     name: running unprivileged
     runs-on: ubuntu-latest
