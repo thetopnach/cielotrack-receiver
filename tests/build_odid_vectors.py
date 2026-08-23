@@ -230,6 +230,20 @@ CASES = [
         "message": system(0.0, 0.0, op_alt_m=158.0),
         "expect": {},
     },
+    {
+        "name": "a speed that lands exactly on a rounding tie",
+        "why": "Horizontal speed is encoded in 0.25 m/s steps, so every other value "
+               "ends in .25 or .75 and ties when rounded to one decimal. Python rounds "
+               "half to even and C's round() goes half away from zero, which made the "
+               "two implementations disagree by 0.1 m/s on 115 of 5030 fields — found "
+               "by fuzzing, not by any case anyone thought to write.",
+        "decoder": "location",
+        "message": location(LAT, LON, height_m=30.0, speed_raw=53),
+        "expect": {"lat": 10.0, "lon": 20.0,
+                   "altitude_m": 30.0, "altitude_ref": "agl",
+                   "height_m": 30.0, "height_ref": "takeoff",
+                   "speed_mps": 13.2, "vspeed_mps": 0.0, "direction_deg": 90},
+    },
 ]
 
 DECODERS = {

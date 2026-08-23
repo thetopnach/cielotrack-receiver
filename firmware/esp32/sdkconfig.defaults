@@ -1,0 +1,40 @@
+# The chip. Without this a clean checkout builds for plain esp32, whose controller has
+# no extended advertising at all, and the failure is a wall of undefined references to
+# esp_ble_gap_set_ext_scan_params — which reads as broken code rather than a missing
+# `idf.py set-target`. The local sdkconfig that records the target is gitignored, so
+# this file is the only place a fresh clone can learn it.
+CONFIG_IDF_TARGET="esp32s3"
+
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+# Remote ID is carried on BLE 5 extended advertising. Without this the radio sees only
+# legacy advertisements and silently misses most aircraft — the same failure the README
+# documents for Bluetooth 4 dongles on the Pi.
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_GATTC_ENABLE=n
+# The GATT server was switched off because a receiver only ever scanned — it never
+# served anything. Provisioning does: the phone talks to the board over a GATT service,
+# so protocomm's BLE transport will not link without it. Still no GATT *client*, which
+# nothing here needs.
+CONFIG_BT_GATTS_ENABLE=y
+
+# Reporting to the central server over TLS. The bundle rather than a pinned certificate:
+# cielotrack.com rotates every ninety days, and a pin nobody remembers to update is a
+# receiver that goes silent on a Tuesday for no visible reason.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# The board has 8 MB and the build was addressing 2, which the bootloader warns about on
+# every boot. It matters from here on: an outbox and OTA both need somewhere to live.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Provisioning security. Version 1 is X25519 plus AES-CTR keyed by a proof of possession,
+# and it is compiled out by default in this IDF. Version 2 (SRP6a) is stronger but wants
+# a salt and verifier generated per device, which would put a per-board secret back into
+# the build — the thing provisioning exists to remove. Version 0 is plain text and would
+# let anyone in radio range point the receiver at their own network.
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
