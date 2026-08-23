@@ -51,6 +51,29 @@ jobs:
         if: always()
         run: python3 tests/test_receiver_state.py write_failures_are_reported_then_clear
 
+  decoder:
+    name: message decoder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      # A decoder that reads control characters as a name invents aircraft. This one
+      # was fixed on 2026-08-17 and the fix then sat unreleased, because nothing in CI
+      # was asserting it here.
+      - name: a Basic ID that is not text is not an aircraft
+        if: always()
+        run: python3 tests/test_odid_decode.py a_basic_id_that_is_not_text_is_not_an_aircraft
+      - name: the whole decoder
+        if: always()
+        run: python3 tests/test_odid_decode.py
+      - name: decoder matches its recorded vectors
+        if: always()
+        run: python3 tests/test_odid_vectors.py
+
   state-paths:
     name: running unprivileged
     runs-on: ubuntu-latest

@@ -35,10 +35,25 @@ ODID_OPERATOR_LOCATION_TYPE_LABELS = {0: "takeoff", 1: "live-gnss", 2: "fixed"}
 
 
 def decode_basic_id(msg):
-    """Decodes a 25-byte Basic ID message (type nibble 0x0): ID type, UA type, UAS ID."""
+    """Decodes a 25-byte Basic ID message (type nibble 0x0): ID type, UA type, UAS ID.
+
+    Returns {} when the ID is not text. A serial or registration id is ASCII by
+    definition — CTA-2063-A serials are alphanumeric — so control bytes in that field
+    mean this is not a Basic ID: something else was read at this offset, and its type
+    nibble is no more trustworthy than its ID.
+
+    Heard for real on 2026-08-17: a Wi-Fi frame decoded to UAS ID "|U(\x0e\nhT'-", type
+    "Glider", from four metres away. Recorded, it put an aircraft on the map that does not
+    exist and a serial in the identity table that nothing can ever match. Reading control
+    characters as a name is how a decoder invents aircraft."""
     id_type = msg[1] >> 4
     ua_type = msg[1] & 0x0F
-    uas_id = msg[2:22].split(b'\x00')[0].decode('ascii', errors='ignore').strip()
+    raw = msg[2:22].split(b'\x00')[0]
+    # 'ignore' drops bytes above 0x7F but keeps everything below 0x20, which is exactly
+    # what let the frame above through: every byte in it is technically ASCII.
+    uas_id = raw.decode('ascii', errors='ignore').strip()
+    if any(character < ' ' or character == '\x7f' for character in uas_id):
+        return {}
     return {
         "uas_id": uas_id or "N/A",
         "id_type": ODID_ID_TYPE_LABELS.get(id_type, f"Type {id_type}"),

@@ -103,7 +103,38 @@ def test_position_is_decoded():
     return ok
 
 
+def test_a_basic_id_that_is_not_text_is_not_an_aircraft():
+    """A serial is ASCII by definition, so control bytes in that field mean this is not
+    a Basic ID — something else was read at this offset, and its type nibble is no more
+    trustworthy than its ID.
+
+    The frame here is real, heard on Wi-Fi from four metres away on 2026-08-17. Decoded,
+    it put a "Glider" on the map with the UAS ID |U(\x0e\nhT'- — an aircraft that does
+    not exist and a serial nothing can ever match."""
+    print("\na Basic ID that is not text is not an aircraft")
+    junk = bytes([0x00, 0x62]) + b"|U(\x0e\nhT'-" + b"\x00" * 14
+    ok = check("the frame heard on 2026-08-17 decodes to nothing",
+               odid_decode.decode_basic_id(junk) == {}, str(odid_decode.decode_basic_id(junk)))
+
+    # 'ascii', errors='ignore' drops bytes above 0x7F and keeps everything below 0x20,
+    # which is exactly how that frame got through.
+    low = bytes([0x00, 0x12]) + b"178650\x07104A" + b"\x00" * 9
+    ok &= check("a control byte anywhere in the id is enough",
+                odid_decode.decode_basic_id(low) == {}, str(odid_decode.decode_basic_id(low)))
+
+    real = bytes([0x00, 0x12]) + b"1898B0030G2172LH" + b"\x00" * 4
+    decoded = odid_decode.decode_basic_id(real)
+    ok &= check("a real serial still decodes",
+                decoded.get("uas_id") == "1898B0030G2172LH", str(decoded))
+    padded = bytes([0x00, 0x24]) + b"1786501044 " + b"\x00" * 9
+    ok &= check("and padding is still trimmed rather than rejected",
+                odid_decode.decode_basic_id(padded).get("uas_id") == "1786501044",
+                str(odid_decode.decode_basic_id(padded)))
+    return ok
+
+
 TESTS = [
+    test_a_basic_id_that_is_not_text_is_not_an_aircraft,
     test_height_and_altitude_are_both_reported,
     test_height_type_flag_is_read,
     test_absolute_only_broadcast,
