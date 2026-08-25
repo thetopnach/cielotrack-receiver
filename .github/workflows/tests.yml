@@ -51,6 +51,27 @@ jobs:
         if: always()
         run: python3 tests/test_receiver_state.py write_failures_are_reported_then_clear
 
+  claim:
+    name: claim request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      # radio_tracker imports python-dotenv at module scope; without this the test
+      # fails at import on a clean runner, the same gap the state-machine job notes.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      # An opt-in contact address must ride along only when set -- a receiver that gave
+      # no address must never end up mailed, and the address is never a claim credential.
+      - name: the address is sent when set
+        if: always()
+        run: python3 tests/test_receiver_claim.py address_is_sent_when_set
+      - name: the address is absent when unset
+        if: always()
+        run: python3 tests/test_receiver_claim.py address_is_absent_when_unset
+
   decoder:
     name: message decoder
     runs-on: ubuntu-latest
