@@ -263,6 +263,12 @@ CREDENTIALS_FILE = env_or("CREDENTIALS_FILE",
                           os.path.join(STATE_DIR, "device_credentials.json"))
 OUTBOX_DB = env_or("OUTBOX_DB", os.path.join(STATE_DIR, "outbox.db"))
 SYNC_INTERVAL = 15
+# An unclaimed receiver has nothing to upload and only polls to learn whether a human
+# has claimed it. Checking every SYNC_INTERVAL means a board left unclaimed hits the
+# server ~11k times a day forever, so back the claim-check off exponentially to this
+# ceiling. It still registers immediately on boot and picks up its key within one
+# interval of being claimed; only idle polling slows.
+CLAIM_CHECK_MAX = 600
 # Matches the server's expectation; it treats three missed intervals as offline.
 HEARTBEAT_INTERVAL = 60
 
@@ -854,10 +860,21 @@ def central_sync_loop():
     in the main thread never waits on any of this."""
     init_outbox_db()
     creds = get_credentials()
+    # Backoff applies only to the unclaimed claim-check. A claimed receiver takes the
+    # api_key branch and uploads on the normal cadence, never touching this.
+    claim_backoff = SYNC_INTERVAL
+    next_claim_at = 0.0
     while True:
         try:
-            if ensure_claimed(creds):
+            if creds.get("api_key"):
                 sync_outbox(creds)
+            elif time.monotonic() >= next_claim_at:
+                if ensure_claimed(creds):
+                    sync_outbox(creds)
+                    claim_backoff = SYNC_INTERVAL
+                else:
+                    claim_backoff = min(claim_backoff * 2, CLAIM_CHECK_MAX)
+                next_claim_at = time.monotonic() + claim_backoff
         except Exception as e:
             print(f"⚠️ Central sync loop error: {e}")
         time.sleep(SYNC_INTERVAL)
