@@ -259,6 +259,12 @@ def play_audio_alert():
 # audio chime) never depends on the cloud side working. A background thread drains
 # the outbox whenever it can.
 CENTRAL_SERVER_URL = env_or("CENTRAL_SERVER_URL", "http://127.0.0.1:8090")
+# Optional. A headless receiver buries its claim code in the journal; if the operator put
+# an address here, the server can email the code so the box actually gets claimed. Purely
+# for that reminder -- it never grants ownership (claiming still needs a signed-in
+# session), the server sends at most one message per address ever, and every message
+# carries an unsubscribe link.
+CONTACT_EMAIL = env_or("CIELOTRACK_CONTACT_EMAIL", "").strip()
 CREDENTIALS_FILE = env_or("CREDENTIALS_FILE",
                           os.path.join(STATE_DIR, "device_credentials.json"))
 OUTBOX_DB = env_or("OUTBOX_DB", os.path.join(STATE_DIR, "outbox.db"))
@@ -567,9 +573,15 @@ def ensure_claimed(creds):
     if creds.get("api_key"):
         return True
     try:
-        _central_request("POST", "/v1/devices/claim", body={
-            "device_id": creds["device_id"], "bootstrap_secret": creds["bootstrap_secret"],
-        })
+        body = {"device_id": creds["device_id"], "bootstrap_secret": creds["bootstrap_secret"]}
+        # Only when the operator opted in by setting it. The server treats this as a
+        # reminder address, not a binding -- claiming still needs a signed-in session --
+        # so it cannot be used to hijack a device the way an email-plus-code claim once
+        # could. Omitted entirely when unset, so a receiver that gave no address is never
+        # mailed. See CONTACT_EMAIL above.
+        if CONTACT_EMAIL:
+            body["contact_email"] = CONTACT_EMAIL
+        _central_request("POST", "/v1/devices/claim", body=body)
         status = _central_request("GET", f"/v1/devices/{creds['device_id']}/status",
                                    headers={"X-Bootstrap-Secret": creds["bootstrap_secret"]})
         if status.get("status") == "claimed" and status.get("api_key"):
@@ -578,11 +590,11 @@ def ensure_claimed(creds):
             print(f"✅ Central server: device claimed, now reporting detections.")
             return True
         if status.get("claim_code"):
-            # Points at the page rather than the API on purpose. Claiming needs a
-            # signed-in session — the email was deliberately removed from the request
-            # body, since accepting it let anyone holding a code bind the device to
-            # any address they typed. This message used to describe that old call and
-            # would have sent every new user down a path that answers "sign in first".
+            # Points at the page, not the API, on purpose: claiming needs a signed-in
+            # session. The optional CONTACT_EMAIL sent at registration is only a reminder
+            # address the server may mail this code to -- never a claim credential, so it
+            # cannot bind the device to an address the way an email-plus-code claim once
+            # could. This message is the fallback for a receiver that gave no address.
             print(f"🔑 Central server: unclaimed. Claim code: {status['claim_code']} "
                   f"— enter this at {CENTRAL_SERVER_URL}/receivers")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
