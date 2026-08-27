@@ -1,0 +1,18 @@
+# CieloTrack receiver partition table — A/B recovery layout.
+#
+# Two full copies of the app (factory + ota_0). The bootloader boots one and falls back
+# to the other when the selected image fails to load, so a corrupted app partition — the
+# usual result of a brownout mid-write, which is how a board bricked during an antenna
+# swap on 2026-08-27 — no longer takes the board down: it comes up on the other copy.
+#
+# nvs and phy_init keep the singleapp_large offsets (0x9000 / 0xf000) on purpose: a
+# reflash that rewrites the table and both app copies but leaves those two regions alone
+# preserves the provisioned Wi-Fi credentials and the RF calibration, so the board rejoins
+# on its own with no re-provisioning. Sized for the 8MB flash with room to spare.
+#
+# Name,     Type, SubType,  Offset,    Size
+nvs,        data, nvs,      0x9000,    0x6000
+phy_init,   data, phy,      0xf000,    0x1000
+otadata,    data, ota,      0x10000,   0x2000
+factory,    app,  factory,  0x20000,   0x280000
+ota_0,      app,  ota_0,    0x2a0000,  0x280000
