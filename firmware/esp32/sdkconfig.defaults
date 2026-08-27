@@ -38,3 +38,7 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # the build — the thing provisioning exists to remove. Version 0 is plain text and would
 # let anyone in radio range point the receiver at their own network.
 CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
+
+# A/B recovery: the bootloader falls back to a valid app copy if the selected one
+# fails to load, so a corrupt image no longer bricks the board.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
