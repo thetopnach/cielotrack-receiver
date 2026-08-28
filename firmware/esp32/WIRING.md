@@ -13,8 +13,8 @@ reading a C header.
 
 | role | MAC (also its USB serial number) | radio | network |
 |---|---|---|---|
-| **master** | `A4:CB:8F:D2:76:F8` | BLE, extended scanning | Wi-Fi, uploads for both |
-| **sensor** | `A4:CB:8F:D2:6E:6C` | Wi-Fi, promiscuous on channel 6 | none at all |
+| **master** | `A4:CB:8F:D2:6E:6C` | BLE, extended scanning | Wi-Fi, uploads for both |
+| **sensor** | `A4:CB:8F:D2:76:F8` | Wi-Fi, promiscuous on channel 6 | none at all |
 
 They identify themselves by USB serial, not by port number, and the numbering changes
 between plug-ins. Always check before flashing:
