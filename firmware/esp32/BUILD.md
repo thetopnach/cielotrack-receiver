@@ -99,6 +99,45 @@ Then keep the antennas ≥ 0.5 m apart and close the enclosure. See `WIRING.md` 
 § Antennas, and § Reading a board's console (these boards only stream once a host asserts
 DTR — `cat /dev/ttyACM0` reads like a dead board otherwise).
 
+## Carrier PCB variant
+
+A carrier PCB seats both XIAO modules and puts the inter-board link and the power feed
+in copper, so it replaces the loose 3-pin connector of step 2 — not the rest of the guide.
+The pin meanings are still `WIRING.md`'s; the board just makes them permanent.
+
+What the copper does, and what to check on the fab before you populate it:
+
+- **The link is a single data trace: sensor `D9` (GPIO8) → master `D10` (GPIO9).** One
+  wire, one direction, and it must land on `D9` at one module and `D10` at the *other* —
+  not the same pin on both. Because both footprints sit the same way up, that trace steps
+  one pad between them; a straight `D9→D9` or `D10→D10` is RX↔RX and the master logs
+  `peer_link_down` forever. This is the one net to verify by eye.
+- **`5V` and `GND` are commoned across both modules**, fed from **J1**, the 2-pin power
+  input. That shared `GND` is also the link's reference — without it the UART reads
+  nothing, so confirm J1's ground reaches *both* modules' `GND` pads.
+- **`3V3` is left unconnected** between the modules, for the same reason as the hand-wired
+  build: linking it browns out the sensor and looks like a software fault.
+
+**Role is committed by the copper.** Whichever module has its `D9` on the data trace must
+be flashed as the **sensor** (`secrets.wifi.h`); the `D10` side is the **master**
+(`secrets.ble.h`). Flash to match the board or the roles and the wiring disagree. Step 3's
+`secrets` split, step 4's flash, and steps 5–8 (label, provision, claim, verify) are all
+unchanged.
+
+**Powering the pair.** The rail is common, so there are two sources and you use exactly
+one at a time:
+
+- **J1** — a regulated **5 V** supply with headroom (two ESP32-S3s on Wi-Fi + BLE peak
+  past half an amp, so 5 V / 1 A is comfortable). Mind polarity: **pin 1 = GND, pin 2 =
+  5 V**; reversed, it can kill both modules, so key or mark the J1 cable. This is the tidy
+  choice for a deployed unit — both USB-C ports stay free and protected.
+- **a module's USB-C** — one cable powers both through the shared rail. Convenient on the
+  bench, and it's already what you plug in to flash.
+
+**Never both at once** — J1's 5 V and a board's USB 5 V are two sources fighting on one
+rail, the same hazard as flashing two boards together. So **flash with J1 unplugged, one
+USB-C at a time**, and if J1 is the running supply, pull it before a reflash.
+
 ## One board
 A single board needs none of the link or role configuration: leave `CIELOTRACK_SENSOR_ONLY`
 and the peer defines undefined and it behaves as its own receiver with its own uplink.
