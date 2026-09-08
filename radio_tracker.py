@@ -197,9 +197,19 @@ def detect_ble_interface(sysfs=BLUETOOTH_SYSFS):
 
 
 BLE_INTERFACE = detect_ble_interface()
-# Alfa AWUS036ACM (MT7612U) in monitor mode. Separate radio from the BLE dongle, so
-# the two capture paths never contend for airtime. Empty disables the Wi-Fi path.
-WIFI_INTERFACE = os.environ.get("WIFI_INTERFACE", "wlan1")
+# Alfa AWUS036ACM (MT7612U) in monitor mode. Separate radio from the BLE dongle, so the
+# two capture paths never contend for airtime. Defaults to wlan1; set WIFI_INTERFACE to
+# "none" to force the Wi-Fi path off. env_or (not os.environ.get) so a .env that ships the
+# key present-but-blank still gets the default instead of silently disabling capture — the
+# exact trap env_or exists for, and the reason a freshly-provisioned adapter once sat dark.
+WIFI_INTERFACE = env_or("WIFI_INTERFACE", "wlan1")
+if WIFI_INTERFACE.lower() in ("none", "off", "disabled"):
+    WIFI_INTERFACE = ""
+
+# Whether the Wi-Fi capture thread was actually started this session, reported in the
+# heartbeat so "an interface is configured" is never mistaken for "we are capturing off
+# it" — they diverge when the adapter is absent or NetworkManager has it as managed.
+WIFI_CAPTURING = False
 
 def parse_wifi_channels(raw):
     """Comma-separated channel list for the Wi-Fi radio to rotate across; a single
@@ -689,7 +699,8 @@ def collect_radio_status():
     elif radio_state["ble_mode"] != "extended":
         problems.append("ble_not_scanning")
 
-    wifi = {"interface": WIFI_INTERFACE or None, "mode": None, "channel": None}
+    wifi = {"interface": WIFI_INTERFACE or None, "mode": None, "channel": None,
+            "capturing": WIFI_CAPTURING}
     if WIFI_INTERFACE:
         try:
             out = subprocess.run(["iw", "dev", WIFI_INTERFACE, "info"],
@@ -702,7 +713,21 @@ def collect_radio_status():
                     wifi["channel"] = int(line.split()[1])
         except Exception as e:
             wifi["error"] = str(e)
-        if wifi["mode"] != "monitor":
+        # `iw` is not installed everywhere; read monitor state from sysfs as a fallback so
+        # the mode is still measured (ARPHRD 803 == monitor) rather than left unknown.
+        if wifi["mode"] is None:
+            try:
+                with open(f"/sys/class/net/{WIFI_INTERFACE}/type") as fh:
+                    wifi["mode"] = "monitor" if fh.read().strip() == "803" else "managed"
+            except OSError:
+                pass
+        # The failure that used to read as healthy: an interface is named and even sits in
+        # monitor mode, but the receiver never opened a capture thread on it (adapter absent
+        # at boot, or a blank WIFI_INTERFACE that disabled the path). Report it distinctly
+        # from NetworkManager reclaiming a live capture (wifi_not_monitor).
+        if not WIFI_CAPTURING:
+            problems.append("wifi_configured_not_capturing")
+        elif wifi["mode"] != "monitor":
             problems.append("wifi_not_monitor")
 
     try:
@@ -1665,10 +1690,17 @@ def main():
     threading.Thread(target=heartbeat_loop, args=(get_credentials(),),
                      daemon=True).start()
 
-    if WIFI_INTERFACE:
+    if WIFI_INTERFACE and os.path.exists(f"/sys/class/net/{WIFI_INTERFACE}"):
+        global WIFI_CAPTURING
+        WIFI_CAPTURING = True
         print(f"📶 Wi-Fi Remote ID interface: {WIFI_INTERFACE} (monitor mode, "
               f"channels {', '.join(str(c) for c in WIFI_CHANNELS)})")
         threading.Thread(target=wifi_capture_loop, daemon=True).start()
+    elif WIFI_INTERFACE:
+        # Named but not present — a receiver with no monitor adapter (or one that has not
+        # been provisioned). Run BLE-only quietly instead of spinning the capture loop.
+        print(f"📶 Wi-Fi: interface {WIFI_INTERFACE} not present — Wi-Fi capture off, "
+              f"running BLE-only. Plug in the adapter and `sudo ./provision.sh {WIFI_INTERFACE}`.")
 
     try:
         # Retries rather than returning, so a replugged adapter is picked back up.
