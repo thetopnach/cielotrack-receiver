@@ -11,8 +11,8 @@ The MAC is a board's Wi-Fi STA MAC (its USB serial number; see firmware/esp32/WI
 The salt must match CIELOTRACK_PROV_SALT in the flashed secrets.h, or the QR won't match
 the board.
 
-    python3 provisioning_label.py --salt "our-fleet-salt" A4:CB:8F:D2:6E:6C A4:CB:8F:D2:76:F8
-    python3 provisioning_label.py --salt "our-fleet-salt" --width 62 --height 40 --out labels.pdf A4CB8FD26E6C
+    python3 provisioning_label.py --salt "our-fleet-salt" A4:CB:8F:01:23:45 A4:CB:8F:01:23:46
+    python3 provisioning_label.py --salt "our-fleet-salt" --width 62 --height 40 --out labels.pdf A4CB8F012345
 """
 import argparse
 import hashlib

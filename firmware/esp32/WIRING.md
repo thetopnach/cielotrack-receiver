@@ -13,11 +13,13 @@ reading a C header.
 
 | role | MAC (also its USB serial number) | radio | network |
 |---|---|---|---|
-| **master** | `A4:CB:8F:D2:6E:6C` | BLE, extended scanning | Wi-Fi, uploads for both |
-| **sensor** | `A4:CB:8F:D2:76:F8` | Wi-Fi, promiscuous on channel 6 | none at all |
+| **master** | `A4:CB:8F:01:23:45` | BLE, extended scanning | Wi-Fi, uploads for both |
+| **sensor** | `A4:CB:8F:01:23:46` | Wi-Fi, promiscuous on channel 6 | none at all |
 
-They identify themselves by USB serial, not by port number, and the numbering changes
-between plug-ins. Always check before flashing:
+The MACs above are illustrative — `A4:CB:8F` is Espressif's prefix, but every board's own
+suffix differs, so read yours rather than copying these. They identify themselves by USB
+serial, not by port number, and the numbering changes between plug-ins. Always check
+before flashing:
 
 ```bash
 for d in /dev/ttyACM*; do echo -n "$d "; udevadm info -q property -n $d | grep ID_SERIAL_SHORT; done
