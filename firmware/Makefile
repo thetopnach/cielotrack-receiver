@@ -11,7 +11,7 @@ BUILD   := build
 
 .PHONY: test clean vectors
 
-test: $(BUILD)/test_vectors $(BUILD)/test_ble $(BUILD)/test_pack $(BUILD)/test_wifi_rid $(BUILD)/test_identity_cache $(BUILD)/test_peer_link $(BUILD)/test_contact_time $(BUILD)/test_health $(BUILD)/decode_cli $(BUILD)/extract_cli $(BUILD)/pack_cli $(BUILD)/label_cli
+test: $(BUILD)/test_vectors $(BUILD)/test_ble $(BUILD)/test_pack $(BUILD)/test_wifi_rid $(BUILD)/test_identity_cache $(BUILD)/test_peer_link $(BUILD)/test_contact_json $(BUILD)/test_contact_time $(BUILD)/test_health $(BUILD)/decode_cli $(BUILD)/extract_cli $(BUILD)/pack_cli $(BUILD)/label_cli
 	@$(BUILD)/test_vectors
 	@echo
 	@$(BUILD)/test_ble
@@ -23,6 +23,8 @@ test: $(BUILD)/test_vectors $(BUILD)/test_ble $(BUILD)/test_pack $(BUILD)/test_w
 	@$(BUILD)/test_identity_cache
 	@echo
 	@$(BUILD)/test_peer_link
+	@echo
+	@$(BUILD)/test_contact_json
 	@$(BUILD)/test_contact_time
 	@$(BUILD)/test_health
 
@@ -41,6 +43,10 @@ $(BUILD)/test_contact_time: esp32/main/contact_time.c test/test_contact_time.c e
 $(BUILD)/test_peer_link: test/test_peer_link.c
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ test/test_peer_link.c
+
+$(BUILD)/test_contact_json: esp32/main/contact_json.c test/test_contact_json.c esp32/main/contact_json.h esp32/main/uplink.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $@ esp32/main/contact_json.c test/test_contact_json.c -lm
 
 $(BUILD)/label_cli: odid_decode.c test/label_cli.c odid_decode.h
 	@mkdir -p $(BUILD)

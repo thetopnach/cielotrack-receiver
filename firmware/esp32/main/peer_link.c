@@ -1,4 +1,5 @@
 #include "peer_link.h"
+#include "contact_json.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -66,30 +67,13 @@ static void send_line(const char *kind, const char *json) {
     uart_write_bytes(PEER_LINK_UART_NUM, line, (size_t)used);
 }
 
-/* Only the fields that were actually decoded, exactly as the uplink does it: a field
- * left out says "we do not know", a field sent as null says "we know it is nothing",
- * and the two are different claims about an aircraft. */
-static int append_number(char *out, size_t size, int used, const char *key, double value) {
-    if (isnan(value)) return used;
-    return used + snprintf(out + used, size - used, ",\"%s\":%.7f", key, value);
-}
-
-static int append_string(char *out, size_t size, int used, const char *key,
-                         const char *value) {
-    if (value == NULL || value[0] == '\0') return used;
-    return used + snprintf(out + used, size - used, ",\"%s\":\"%s\"", key, value);
-}
-
 void peer_link_send_contact(const uplink_contact_t *c) {
     char json[PEER_LINK_MAX_LINE - 16];
     int used = snprintf(json, sizeof json, "{\"rssi_dbm\":%d", c->rssi_dbm);
-    used = append_string(json, sizeof json, used, "mac", c->mac);
-    used = append_string(json, sizeof json, used, "uas_id", c->uas_id);
-    used = append_string(json, sizeof json, used, "ua_type", c->ua_type);
-    used = append_number(json, sizeof json, used, "lat", c->lat);
-    used = append_number(json, sizeof json, used, "lon", c->lon);
-    used = append_number(json, sizeof json, used, "altitude_m", c->altitude_m);
-    used = append_number(json, sizeof json, used, "speed_mps", c->speed_mps);
+    /* The aircraft-descriptor fields, from the one writer the uplink shares — so the
+     * relay carries altitude_ref and the broadcast height rather than dropping them, the
+     * way it silently did when it kept its own copy of this list. */
+    used = contact_append_fields(json, sizeof json, used, c);
     used += snprintf(json + used, sizeof json - used,
                      ",\"message_count\":%d,\"inferred\":%s}",
                      c->message_count, c->inferred ? "true" : "false");
