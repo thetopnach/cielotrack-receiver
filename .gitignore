@@ -3,7 +3,12 @@ device_credentials.json
 *.db
 *.db-wal
 *.db-shm
+# Detection exports and the like — but NOT the firmware's partition table, which is
+# hand-authored source the build reads by name (sdkconfig CONFIG_PARTITION_TABLE_CUSTOM_
+# FILENAME). Without the negation the broad rule below swallowed it, so a fresh clone
+# could not build until the file was copied in by hand.
 *.csv
+!firmware/esp32/partitions.csv
 *.log
 __pycache__/
 *.pyc
