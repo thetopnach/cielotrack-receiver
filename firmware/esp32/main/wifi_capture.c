@@ -115,7 +115,8 @@ static void on_frame(void *buffer, wifi_promiscuous_pkt_type_t type) {
     uint8_t mac[6];
     if (!wifi_rid_transmitter(frame, length, mac)) return;
 
-    uplink_contact_t contact = { .lat = NAN, .lon = NAN, .altitude_m = NAN, .speed_mps = NAN,
+    uplink_contact_t contact = { .lat = NAN, .lon = NAN, .altitude_m = NAN,
+                          .height_m = NAN, .speed_mps = NAN,
                           .rssi_dbm = packet->rx_ctrl.rssi, .message_count = count,
                           .decoded_us = esp_timer_get_time() };
     snprintf(contact.mac, sizeof contact.mac, "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -142,7 +143,19 @@ static void on_frame(void *buffer, wifi_promiscuous_pkt_type_t type) {
             if (loc.valid) {
                 contact.lat = loc.lat;
                 contact.lon = loc.lon;
-                if (loc.has_altitude) contact.altitude_m = loc.altitude_m;
+                if (loc.has_altitude) {
+                    contact.altitude_m = loc.altitude_m;
+                    /* The reference goes with it — a height above takeoff read as absolute
+                     * lands below the terrain and renders at zero. "absolute" is the
+                     * server's word, not the "abs" used elsewhere for the console. */
+                    snprintf(contact.altitude_ref, sizeof contact.altitude_ref, "%s",
+                             loc.altitude_ref == ODID_ALT_AGL ? "agl" : "absolute");
+                }
+                if (loc.has_height) {
+                    contact.height_m = loc.height_m;
+                    snprintf(contact.height_ref, sizeof contact.height_ref, "%s",
+                             loc.height_ref == ODID_HEIGHT_GROUND ? "ground" : "takeoff");
+                }
                 contact.speed_mps = loc.speed_mps;
                 anything = true;
             }

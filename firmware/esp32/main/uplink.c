@@ -1,4 +1,5 @@
 #include "uplink.h"
+#include "contact_json.h"
 #include "contact_time.h"
 
 #include <sys/time.h>
@@ -305,19 +306,9 @@ bool uplink_ready(void) {
     return (bits & CONNECTED_BIT) && (bits & CLOCK_BIT) && UPLINK_HAVE_CREDENTIALS();
 }
 
-/* Appends "key": value only when the value was actually decoded. A field omitted says
- * "we do not know"; a field sent as null says "we know it is nothing", and the two are
- * different claims about an aircraft. */
-static int append_number(char *out, size_t size, int used, const char *key, double value) {
-    if (isnan(value)) return used;
-    return used + snprintf(out + used, size - used, ",\"%s\":%.7f", key, value);
-}
-
-static int append_string(char *out, size_t size, int used, const char *key,
-                         const char *value) {
-    if (value == NULL || value[0] == '\0') return used;
-    return used + snprintf(out + used, size - used, ",\"%s\":\"%s\"", key, value);
-}
+/* append_number/append_string and the contact's field list live in contact_json.c now,
+ * shared with the peer relay so a field cannot be carried by one writer and dropped by
+ * the other — which is how altitude_ref and the broadcast height went missing. */
 
 /* One POST, shared by detections and heartbeats. Returns true on a 2xx.
  *
@@ -375,13 +366,7 @@ static int append_contact(char *out, size_t size, int used, const char *stamp,
                      "{\"detected_at\":\"%s\",\"protocol\":\"%s\"",
                      stamp, CIELOTRACK_PROTOCOL);
     if (used >= (int)size) return used;
-    used = append_string(out, size, used, "mac", c->mac);
-    used = append_string(out, size, used, "uas_id", c->uas_id);
-    used = append_string(out, size, used, "ua_type", c->ua_type);
-    used = append_number(out, size, used, "lat", c->lat);
-    used = append_number(out, size, used, "lon", c->lon);
-    used = append_number(out, size, used, "altitude_m", c->altitude_m);
-    used = append_number(out, size, used, "speed_mps", c->speed_mps);
+    used = contact_append_fields(out, size, used, c);
     used += snprintf(out + used, size > (size_t)used ? size - used : 0,
                      ",\"rssi_dbm\":%d,\"message_count\":%d,"
                      "\"identity_source\":\"%s\"}", c->rssi_dbm, c->message_count,
@@ -452,21 +437,18 @@ void uplink_report(const char *mac, const char *uas_id, const char *ua_type,
     char stamp[32];
     contact_stamp(wall_us, mono_us, 0, stamp, sizeof stamp);
 
+    /* The same object the batch path builds, from one contact — so the single and batch
+     * serialisations cannot drift apart. This signature predates altitude_ref and the
+     * broadcast height and carries neither; the fields are simply omitted, which is
+     * correct for a caller that never had them. */
+    uplink_contact_t c = { .lat = lat, .lon = lon, .altitude_m = altitude_m,
+                           .height_m = NAN, .speed_mps = speed_mps, .rssi_dbm = rssi_dbm,
+                           .message_count = message_count, .inferred = inferred };
+    snprintf(c.mac, sizeof c.mac, "%s", mac ? mac : "");
+    snprintf(c.uas_id, sizeof c.uas_id, "%s", uas_id ? uas_id : "");
+    snprintf(c.ua_type, sizeof c.ua_type, "%s", ua_type ? ua_type : "");
     char body[512];
-    int used = snprintf(body, sizeof body,
-                        "{\"detected_at\":\"%s\",\"protocol\":\"%s\"",
-                        stamp, CIELOTRACK_PROTOCOL);
-    used = append_string(body, sizeof body, used, "mac", mac);
-    used = append_string(body, sizeof body, used, "uas_id", uas_id);
-    used = append_string(body, sizeof body, used, "ua_type", ua_type);
-    used = append_number(body, sizeof body, used, "lat", lat);
-    used = append_number(body, sizeof body, used, "lon", lon);
-    used = append_number(body, sizeof body, used, "altitude_m", altitude_m);
-    used = append_number(body, sizeof body, used, "speed_mps", speed_mps);
-    used += snprintf(body + used, sizeof body - used,
-                     ",\"rssi_dbm\":%d,\"message_count\":%d,"
-                     "\"identity_source\":\"%s\"}", rssi_dbm, message_count,
-                     inferred ? "inferred-from-mac" : "decoded");
+    int used = append_contact(body, sizeof body, 0, stamp, &c);
     if (used >= (int)sizeof body) {
         ESP_LOGE(TAG, "payload did not fit; dropping");
         failed_count++;

@@ -198,18 +198,23 @@ static void reporting_task(void *arg) {
 }
 
 static void enqueue_report(const char *mac, const char *uas_id, const char *ua_type,
-                           double lat, double lon, double altitude_m, double speed_mps,
-                           int rssi, bool inferred) {
+                           double lat, double lon, double altitude_m,
+                           const char *altitude_ref, double height_m,
+                           const char *height_ref, double speed_mps, int rssi,
+                           bool inferred) {
     if (reports == NULL) return;
     uplink_contact_t item = { .lat = lat, .lon = lon, .altitude_m = altitude_m,
-                              .speed_mps = speed_mps, .rssi_dbm = rssi,
-                              .inferred = inferred,
+                              .height_m = height_m, .speed_mps = speed_mps,
+                              .rssi_dbm = rssi, .inferred = inferred,
                               /* Here, not at upload: this is the moment it was heard,
                                * and the queue between the two can be seconds deep. */
                               .decoded_us = esp_timer_get_time() };
     snprintf(item.mac, sizeof item.mac, "%s", mac ? mac : "");
     snprintf(item.uas_id, sizeof item.uas_id, "%s", uas_id ? uas_id : "");
     snprintf(item.ua_type, sizeof item.ua_type, "%s", ua_type ? ua_type : "");
+    snprintf(item.altitude_ref, sizeof item.altitude_ref, "%s",
+             altitude_ref ? altitude_ref : "");
+    snprintf(item.height_ref, sizeof item.height_ref, "%s", height_ref ? height_ref : "");
     if (xQueueSend(reports, &item, 0) != pdTRUE) {
         reports_dropped++;
     }
@@ -277,7 +282,8 @@ static void report_detection(const uint8_t *addr, int rssi, const uint8_t *messa
              * Lift" for the same aircraft is the fleet disagreeing with itself. */
             snprintf(type, sizeof type, "%s", odid_ua_type_label(id.ua_type));
             identity_remember(mac, id.uas_id, type, (uint32_t)time(NULL));
-            enqueue_report(mac, id.uas_id, type, NAN, NAN, NAN, NAN, rssi, false);
+            enqueue_report(mac, id.uas_id, type, NAN, NAN, NAN, "", NAN, "", NAN, rssi,
+                           false);
         }
         break;
     }
@@ -310,10 +316,18 @@ static void report_detection(const uint8_t *addr, int rssi, const uint8_t *messa
         bool inferred = identity_recall(mac, recalled_id, sizeof recalled_id,
                                         recalled_type, sizeof recalled_type,
                                         (uint32_t)time(NULL));
+        /* The reference travels with the number. "absolute" is the server's word, not the
+         * "abs" the log line above uses — the server branches on it, so a height above
+         * takeoff must not reach it looking like a WGS84 altitude. */
+        const char *alt_ref = loc.has_altitude
+            ? (loc.altitude_ref == ODID_ALT_AGL ? "agl" : "absolute") : "";
+        const char *hgt_ref = loc.has_height
+            ? (loc.height_ref == ODID_HEIGHT_GROUND ? "ground" : "takeoff") : "";
         enqueue_report(mac, inferred ? recalled_id : NULL,
                        inferred ? recalled_type : NULL, loc.lat, loc.lon,
-                       loc.has_altitude ? loc.altitude_m : NAN, loc.speed_mps, rssi,
-                       inferred);
+                       loc.has_altitude ? loc.altitude_m : NAN, alt_ref,
+                       loc.has_height ? loc.height_m : NAN, hgt_ref,
+                       loc.speed_mps, rssi, inferred);
         break;
     }
     case 0x4: {

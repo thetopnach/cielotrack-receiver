@@ -43,6 +43,17 @@ typedef struct {
     char uas_id[24];
     char ua_type[24];
     double lat, lon, altitude_m, speed_mps;
+    /* What altitude_m is measured against. Without it a height-above-takeoff value —
+     * which is what altitude_m holds when the aircraft broadcasts Height rather than an
+     * absolute altitude — is read downstream as absolute WGS84, placing a 100 m flight
+     * below the terrain and, once the ground is subtracted, at zero. "agl" or "absolute";
+     * "" when no altitude was decoded, so it is omitted rather than sent as a claim.
+     * height_m/height_ref carry the broadcast height as its own measurement when there
+     * was one — NAN / "" otherwise, since a height and an altitude are two facts, not two
+     * spellings of one. */
+    char altitude_ref[12];
+    double height_m;
+    char height_ref[12];
     int rssi_dbm;
     int message_count;
     bool inferred;
