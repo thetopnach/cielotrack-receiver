@@ -32,6 +32,7 @@
 
 #include "odid_ble.h"
 #include "odid_decode.h"
+#include "receiver_ext.h"
 #include "secrets.h"
 #if !defined(CIELOTRACK_SENSOR_ONLY)
 #define CIELOTRACK_SENSOR_ONLY 0
@@ -438,6 +439,9 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(err);
 
+    /* Extension seam: lets an out-of-tree overlay initialise itself (and links it in).
+     * No-op in the open build. See receiver_ext.h. */
+    receiver_ext_init();
 
 #if !CIELOTRACK_ROLE_WIFI
     reports = xQueueCreate(REPORT_QUEUE_DEPTH, sizeof(uplink_contact_t));

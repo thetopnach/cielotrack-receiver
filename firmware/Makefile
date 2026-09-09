@@ -44,9 +44,9 @@ $(BUILD)/test_peer_link: test/test_peer_link.c
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ test/test_peer_link.c
 
-$(BUILD)/test_contact_json: esp32/main/contact_json.c test/test_contact_json.c esp32/main/contact_json.h esp32/main/uplink.h
+$(BUILD)/test_contact_json: esp32/main/contact_json.c esp32/main/receiver_ext.c test/test_contact_json.c esp32/main/contact_json.h esp32/main/receiver_ext.h esp32/main/uplink.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -o $@ esp32/main/contact_json.c test/test_contact_json.c -lm
+	$(CC) $(CFLAGS) -o $@ esp32/main/contact_json.c esp32/main/receiver_ext.c test/test_contact_json.c -lm
 
 $(BUILD)/label_cli: odid_decode.c test/label_cli.c odid_decode.h
 	@mkdir -p $(BUILD)

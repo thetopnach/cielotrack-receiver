@@ -6,6 +6,7 @@ idf_component_register(
     SRCS "main.c"
          "uplink.c"
          "contact_json.c"
+         "receiver_ext.c"
          "provisioning.c"
          "claim.c"
          "peer_link.c"

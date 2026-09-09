@@ -1,4 +1,5 @@
 #include "contact_json.h"
+#include "receiver_ext.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -30,5 +31,8 @@ int contact_append_fields(char *out, size_t size, int used, const uplink_contact
     used = contact_append_number(out, size, used, "height_m", c->height_m);
     used = contact_append_string(out, size, used, "height_ref", c->height_ref);
     used = contact_append_number(out, size, used, "speed_mps", c->speed_mps);
+    /* Extension seam: an out-of-tree overlay may append its own fields here (a fleet tag,
+     * a partner measurement). No-op in the open build. */
+    used = receiver_ext_append_contact_fields(out, size, used, c);
     return used;
 }
