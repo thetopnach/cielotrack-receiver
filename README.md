@@ -13,7 +13,23 @@ nothing and needs no permission to run.
 Your data stays yours: detections are visible only to your account until you choose to
 share them.
 
-## What you need
+## Two ways to build one
+
+The same firmware and decoder drive two hardware builds — pick whichever suits you:
+
+- **Raspberry Pi** — a Pi plus USB radios. Does the most and is the easiest to set up; it
+  is what the rest of this README covers.
+- **ESP32** — two Seeed XIAO ESP32-S3 boards on a small carrier board: cheaper, lower
+  power, no OS. Build it from **[`firmware/esp32/BUILD.md`](firmware/esp32/BUILD.md)**
+  (wiring in [`firmware/esp32/WIRING.md`](firmware/esp32/WIRING.md)).
+
+Either way it is **two radios**, because one radio cannot sit in BLE extended-scan *and*
+Wi-Fi monitor at the same time: the Pi uses two USB adapters (a Bluetooth dongle plus a
+monitor-mode Wi-Fi adapter), the ESP build puts each radio on its own board, linked over
+one wire. The Wi-Fi half is optional in both — BLE alone still hears every drone that
+broadcasts over Bluetooth.
+
+## What you need (Raspberry Pi)
 
 | | |
 |---|---|
