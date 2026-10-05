@@ -291,6 +291,53 @@ def test_an_identity_left_behind_stops_the_receiver():
             rt.INSTALL_DIR, rt.STATE_DIR, rt.CREDENTIALS_FILE = saved
 
 
+def test_a_corrupt_identity_file_stops_rather_than_re_registering():
+    """The same irreversible failure as a stranded identity, one restart away. A
+    credentials file that exists but will not parse — truncated, zeroed by a power cut,
+    hand-edited — would otherwise make the receiver generate a fresh identity and orphan
+    the claimed one, and do it on every boot. So an unreadable file stops the receiver and
+    is left in place for the operator to restore or remove."""
+    print("\na corrupt identity file stops the receiver rather than re-registering")
+    with tempfile.TemporaryDirectory() as tmp:
+        state = os.path.join(tmp, "var")
+        os.makedirs(state)
+        saved = (rt.INSTALL_DIR, rt.STATE_DIR, rt.CREDENTIALS_FILE)
+        try:
+            # Install and state the same directory, so a stranded legacy identity cannot
+            # be what stops it — this isolates the corrupt-file behaviour.
+            rt.INSTALL_DIR = rt.STATE_DIR = state
+            rt.CREDENTIALS_FILE = os.path.join(state, "device_credentials.json")
+
+            def refuses_on(contents, label):
+                with open(rt.CREDENTIALS_FILE, "w") as handle:
+                    handle.write(contents)
+                failed = False
+                try:
+                    rt.load_or_create_credentials()
+                except SystemExit:
+                    failed = True
+                ok = check(f"{label} stops the receiver", failed)
+                ok &= check(f"and leaves the {label} file in place",
+                            os.path.exists(rt.CREDENTIALS_FILE))
+                return ok
+
+            ok = refuses_on("{ this is not json", "unparseable")
+            ok &= refuses_on("", "empty")
+            ok &= refuses_on("{}", "no-identity")
+            ok &= refuses_on(json.dumps({"device_id": "dev-x"}), "half-written")
+
+            # A complete identity is untouched by any of this and still loads.
+            with open(rt.CREDENTIALS_FILE, "w") as handle:
+                json.dump({"device_id": "dev-x", "bootstrap_secret": "s", "api_key": None},
+                          handle)
+            creds = rt.load_or_create_credentials()
+            ok &= check("a complete identity still loads normally",
+                        creds.get("device_id") == "dev-x")
+            return ok
+        finally:
+            rt.INSTALL_DIR, rt.STATE_DIR, rt.CREDENTIALS_FILE = saved
+
+
 def test_the_migration_carries_everything_across():
     print("\nthe migration carries the identity and the queue across")
     with tempfile.TemporaryDirectory() as tmp:
@@ -408,6 +455,7 @@ TESTS = [
     test_the_state_directory_is_resolved_in_order,
     test_a_blank_setting_means_unset,
     test_an_identity_left_behind_stops_the_receiver,
+    test_a_corrupt_identity_file_stops_rather_than_re_registering,
     test_the_migration_carries_everything_across,
     test_the_migration_is_safe_to_run_twice,
     test_a_copy_that_does_not_verify_leaves_the_original,

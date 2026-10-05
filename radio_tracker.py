@@ -363,6 +363,28 @@ def refuse_if_credentials_stranded():
     raise SystemExit(1)
 
 
+def refuse_if_credentials_unreadable(error):
+    """Stop rather than re-register on an identity file we cannot read.
+
+    The same stance as a stranded identity, for the same reason. A credentials file that
+    exists but will not parse — truncated by a full disk, zeroed by a power cut before
+    the atomic rename landed, or hand-edited — still stands for a device that may already
+    be claimed. Regenerating would orphan it silently, and worse than the stranded case
+    it would do so on every restart. So the file is left exactly where it is and the
+    receiver stops loud, until the operator restores a good copy or removes it on purpose.
+    The .tmp from an interrupted save, if one is sitting beside it, is the likeliest
+    thing to hold the real identity."""
+    salvage = CREDENTIALS_FILE + ".tmp"
+    print(f"✗ This receiver's identity file at {CREDENTIALS_FILE} is unreadable: {error}.")
+    print("  Starting now would register this receiver as a new device and orphan the "
+          "one you claimed, so the file has been left untouched.")
+    if os.path.exists(salvage):
+        print(f"  An interrupted save may still hold it:  sudo mv {salvage} {CREDENTIALS_FILE}")
+    print("  Restore a known-good backup, or — to deliberately start over as a new "
+          "device — remove the file and restart.")
+    raise SystemExit(1)
+
+
 def get_credentials():
     """The one credential object every thread shares.
 
@@ -382,12 +404,22 @@ def load_or_create_credentials():
     """A device's identity (device_id + bootstrap_secret) is generated once, locally,
     on first run — never issued by the server — and persisted so it survives restarts."""
     if os.path.exists(CREDENTIALS_FILE):
-        with open(CREDENTIALS_FILE) as f:
-            creds = json.load(f)
-    else:
-        refuse_if_credentials_stranded()
-        creds = {"device_id": str(uuid.uuid4()), "bootstrap_secret": secrets.token_urlsafe(32), "api_key": None}
-        save_credentials(creds)
+        try:
+            with open(CREDENTIALS_FILE) as f:
+                creds = json.load(f)
+            # A file that parses to the wrong shape is as useless as one that does not
+            # parse — an empty object, a list, or a dict missing the two fields that are
+            # the identity — and loading it anyway would register this device as a
+            # stranger with device_id None. Treat both the same.
+            if not isinstance(creds, dict) or not creds.get("device_id") \
+                    or not creds.get("bootstrap_secret"):
+                raise ValueError("no device_id/bootstrap_secret in the file")
+            return creds
+        except (json.JSONDecodeError, ValueError, OSError) as error:
+            refuse_if_credentials_unreadable(error)
+    refuse_if_credentials_stranded()
+    creds = {"device_id": str(uuid.uuid4()), "bootstrap_secret": secrets.token_urlsafe(32), "api_key": None}
+    save_credentials(creds)
     return creds
 
 def save_credentials(creds):

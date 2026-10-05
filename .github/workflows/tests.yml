@@ -142,6 +142,9 @@ jobs:
       - name: an identity left behind stops the receiver
         if: always()
         run: python3 tests/test_state_paths.py an_identity_left_behind_stops_the_receiver
+      - name: a corrupt identity file stops rather than re-registering
+        if: always()
+        run: python3 tests/test_state_paths.py a_corrupt_identity_file_stops_rather_than_re_registering
       - name: the migration carries everything across
         if: always()
         run: python3 tests/test_state_paths.py the_migration_carries_everything_across
