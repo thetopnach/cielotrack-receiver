@@ -301,6 +301,22 @@ if [[ -f "$INSTALL_DIR/cielotrack-update.service" ]]; then
     echo "    to disable: sudo touch /etc/cielotrack/no-auto-update"
 fi
 
+# An optional claim-reminder address, passed from the installer as an environment variable
+# (curl … | sudo CIELOTRACK_CONTACT_EMAIL=you@example.com bash). Persisted into the
+# receiver's .env — which radio_tracker loads via load_dotenv and update.sh preserves —
+# so the server can send one reminder if this box is never claimed. Only when actually
+# given, and never over an address the operator already set by hand. The address is just
+# a reminder: it never grants ownership, claiming still needs a signed-in session.
+if [[ -n "${CIELOTRACK_CONTACT_EMAIL:-}" ]]; then
+    env_file="$INSTALL_DIR/.env"
+    if ! grep -qs '^CIELOTRACK_CONTACT_EMAIL=.' "$env_file"; then
+        [[ -f "$env_file" ]] && sed -i '/^CIELOTRACK_CONTACT_EMAIL=$/d' "$env_file"
+        printf 'CIELOTRACK_CONTACT_EMAIL=%s\n' "$CIELOTRACK_CONTACT_EMAIL" >> "$env_file"
+        chown "$CIELOTRACK_USER":"$CIELOTRACK_USER" "$env_file" 2>/dev/null || true
+        echo "  claim-reminder address recorded in $env_file"
+    fi
+fi
+
 systemctl daemon-reload
 if [[ -n "$IFACE" ]]; then
     systemctl enable --now "cielotrack-monitor@$IFACE.service"
