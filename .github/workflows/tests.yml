@@ -155,6 +155,37 @@ jobs:
         if: always()
         run: python3 tests/test_state_paths.py a_copy_that_does_not_verify_leaves_the_original
 
+  version-report:
+    name: version reporting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      # radio_tracker imports python-dotenv at module scope; without this the test
+      # fails at import on a clean runner, the same gap the other jobs note.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      # The bug was a receiver reporting itself on a prerelease while running the final
+      # build, because a final tag and its rc shared a commit. These build throwaway
+      # repos, so git must be configured with an identity — handled inside the test.
+      - name: a final tag wins over a prerelease on the same commit
+        if: always()
+        run: python3 tests/test_version_report.py a_final_tag_wins_over_a_prerelease_on_the_same_commit
+      - name: a lone prerelease is still reported
+        if: always()
+        run: python3 tests/test_version_report.py a_lone_prerelease_is_still_reported
+      - name: an untagged commit reports its hash
+        if: always()
+        run: python3 tests/test_version_report.py an_untagged_commit_reports_its_hash
+      - name: a dirty tree keeps the dirty marker
+        if: always()
+        run: python3 tests/test_version_report.py a_dirty_tree_keeps_the_dirty_marker
+      - name: a checkout with no git reports unknown
+        if: always()
+        run: python3 tests/test_version_report.py a_checkout_with_no_git_reports_unknown
+
   updater:
     name: updater and rollback
     runs-on: ubuntu-latest
