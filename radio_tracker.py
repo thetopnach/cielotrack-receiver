@@ -283,26 +283,60 @@ SYNC_INTERVAL = 15
 HEARTBEAT_INTERVAL = 60
 
 
-def installed_version():
+def installed_version(directory=None):
     """Which build this is, for the heartbeat.
 
     Read from git rather than a constant in the source, because a constant is exactly
     the thing that gets forgotten in the commit that matters. Falls back quietly: an
     install from a tarball with no .git is unusual but not broken, and a receiver must
     never fail to start over not knowing its own version number.
+
+    When a final release and its release candidate land on the very same commit — a
+    final cut without a code change since the rc — `git describe --tags` resolves the
+    tie to the prerelease name, so a receiver running the final build reports itself as
+    running an -rc and reads as stranded on a prerelease on the fleet page. So when
+    several tags point at this exact commit, prefer a final release tag over a
+    prerelease one. A prerelease is a tag with a hyphen after the version (-rc1, -rc2,
+    -beta) — the same convention update.sh uses. A commit carrying only a prerelease
+    tag — a genuine canary ahead of any release — still reports that prerelease; this
+    only breaks ties, and it changes how the version is *reported*, never which release
+    the updater installs.
     """
-    directory = os.path.dirname(os.path.abspath(__file__))
-    try:
-        described = subprocess.run(
-            # safe.directory because the service runs as root while the checkout is
-            # usually owned by the operator, and git refuses to read a repository whose
-            # owner differs. Naming the directory here rather than relying on ambient
-            # config keeps this working under systemd, where HOME is not the root
-            # account's own — and trusting it to report a version is not a new risk,
-            # since this process is already executing the code inside it.
-            ["git", "-c", f"safe.directory={directory}", "-C", directory,
-             "describe", "--tags", "--always", "--dirty"],
+    directory = directory or os.path.dirname(os.path.abspath(__file__))
+
+    def git(*args):
+        # safe.directory because the service runs as root while the checkout is
+        # usually owned by the operator, and git refuses to read a repository whose
+        # owner differs. Naming the directory here rather than relying on ambient
+        # config keeps this working under systemd, where HOME is not the root
+        # account's own — and trusting it to report a version is not a new risk,
+        # since this process is already executing the code inside it.
+        return subprocess.run(
+            ["git", "-c", f"safe.directory={directory}", "-C", directory, *args],
             capture_output=True, text=True, timeout=5)
+
+    try:
+        pointed = git("tag", "--points-at", "HEAD")
+        if pointed.returncode == 0:
+            finals = [tag for tag in pointed.stdout.split() if "-" not in tag]
+            if finals:
+                # versionsort.suffix is set for symmetry with update.sh: among finals
+                # (none of which carry an -rc suffix) it changes nothing, but it keeps
+                # the ordering identical to the one the updater uses to choose a release.
+                ordered = git("-c", "versionsort.suffix=-rc", "tag",
+                              "--sort=-v:refname", "--list", *finals)
+                chosen = next((tag for tag in ordered.stdout.split() if tag), finals[0])
+                # Preserve git describe's own --dirty signal: a modified tracked file on
+                # an otherwise-tagged commit still reports <tag>-dirty. Untracked files
+                # are left out, matching what `git describe --dirty` counts as dirty.
+                dirty = git("status", "--porcelain", "--untracked-files=no")
+                suffix = "-dirty" if dirty.returncode == 0 and dirty.stdout.strip() else ""
+                return chosen + suffix
+
+        # No final tag on this commit — only a prerelease (a canary ahead of any
+        # release), or no tag at all. Keep the existing behaviour exactly: report the
+        # prerelease name, or the bare short hash when the commit carries no tag.
+        described = git("describe", "--tags", "--always", "--dirty")
         if described.returncode == 0 and described.stdout.strip():
             return described.stdout.strip()
     except Exception:
