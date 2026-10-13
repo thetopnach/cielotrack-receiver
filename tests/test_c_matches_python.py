@@ -56,6 +56,11 @@ def python_decode(message):
 
 def normalise(value):
     """Both sides print numbers; compare them as numbers so 10.0 and 10 agree."""
+    # Python now reports an absent numeric field as None (→ JSON null on the wire); the
+    # C CLI prints its absent token "N/A" for the same case. They mean the same thing,
+    # so compare them as equal rather than as "None" vs "N/A".
+    if value is None:
+        return "N/A"
     if isinstance(value, (int, float)):
         return f"{float(value):.7f}"
     text = str(value)

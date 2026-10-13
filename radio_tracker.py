@@ -561,6 +561,18 @@ def lookup_identity(macs):
         print(f"⚠️ Identity cache read failed: {e}")
         return None
 
+def _csv_value(value):
+    """Show an absent number as "N/A" in the local CSV a person reads.
+
+    The decoder reports an absent numeric field as None, which travels to the central
+    server as JSON null (a number the server accepts, where the string "N/A" was
+    rejected and discarded the whole detection). The local CSV is read by a person,
+    though, so None becomes "N/A" here — at the CSV layer only, never in the uploaded
+    payload. The two paths are deliberately separate: null on the wire, "N/A" on the
+    page."""
+    return "N/A" if value is None else value
+
+
 def enqueue_detection(icao_hex, protocol, telemetry, detected_at, identity_source="decoded",
                       message_count=0, rssi_dbm=None):
     payload = {
@@ -1561,7 +1573,7 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
     ua_type = telemetry.get("ua_type", "N/A")
     lat = telemetry.get("lat", "N/A")
     lon = telemetry.get("lon", "N/A")
-    altitude_m = telemetry.get("altitude_m", "N/A")
+    altitude_m = _csv_value(telemetry.get("altitude_m"))
     speed_mps = telemetry.get("speed_mps", "N/A")
     operator_lat = telemetry.get("operator_lat", "N/A")
     operator_lon = telemetry.get("operator_lon", "N/A")
@@ -1569,7 +1581,7 @@ def log_and_alert(icao_hex, protocol, telemetry=None, dedup_key=None, identity_s
     altitude_ref = telemetry.get("altitude_ref", "N/A")
     operator_location_type = telemetry.get("operator_location_type", "N/A")
     rssi = "N/A" if rssi_dbm is None else rssi_dbm
-    height_m = telemetry.get("height_m", "N/A")
+    height_m = _csv_value(telemetry.get("height_m"))
     height_ref = telemetry.get("height_ref", "N/A")
 
     with open(LOG_FILE, mode='a', newline='') as f:

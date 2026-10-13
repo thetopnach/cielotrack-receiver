@@ -108,12 +108,17 @@ def decode_location(msg):
     # broadcasts both 47.5 and 219.5, and each answers a different question.
     height_m = round(height_enc * 0.5 - 1000, 1) if height_enc else None
 
+    # An absent number is None, which travels as JSON null — never the string "N/A".
+    # The server's validator requires a number here and refuses the whole detection if
+    # it sees "N/A", so a single missing height used to discard a complete sighting of
+    # exactly the aircraft that omit it (Wing, Zipline). The *_ref fields below are
+    # genuinely strings, so "N/A" is the right absence marker for them.
     return {
         "lat": round(lat, 7),
         "lon": round(lon, 7),
-        "altitude_m": round(altitude_m, 1) if altitude_m is not None else "N/A",
+        "altitude_m": round(altitude_m, 1) if altitude_m is not None else None,
         "altitude_ref": altitude_ref,
-        "height_m": height_m if height_m is not None else "N/A",
+        "height_m": height_m,
         "height_ref": ("ground" if height_type else "takeoff") if height_enc else "N/A",
         "speed_mps": round(speed_mps, 1),
         "vspeed_mps": round(speed_v_enc * 0.5, 1),

@@ -112,7 +112,7 @@ CASES = [
         "message": location(LAT, LON, geodetic_m=219.5),
         "expect": {"lat": 10.0, "lon": 20.0,
                    "altitude_m": 219.5, "altitude_ref": "absolute",
-                   "height_m": "N/A", "height_ref": "N/A",
+                   "height_m": None, "height_ref": "N/A",
                    "speed_mps": 10.0, "vspeed_mps": 0.0, "direction_deg": 90},
     },
     {
@@ -123,7 +123,7 @@ CASES = [
         "message": location(LAT, LON, barometric_m=180.0),
         "expect": {"lat": 10.0, "lon": 20.0,
                    "altitude_m": 180.0, "altitude_ref": "absolute",
-                   "height_m": "N/A", "height_ref": "N/A",
+                   "height_m": None, "height_ref": "N/A",
                    "speed_mps": 10.0, "vspeed_mps": 0.0, "direction_deg": 90},
     },
     {
@@ -132,8 +132,8 @@ CASES = [
         "decoder": "location",
         "message": location(LAT, LON),
         "expect": {"lat": 10.0, "lon": 20.0,
-                   "altitude_m": "N/A", "altitude_ref": "N/A",
-                   "height_m": "N/A", "height_ref": "N/A",
+                   "altitude_m": None, "altitude_ref": "N/A",
+                   "height_m": None, "height_ref": "N/A",
                    "speed_mps": 10.0, "vspeed_mps": 0.0, "direction_deg": 90},
     },
     {
@@ -144,7 +144,7 @@ CASES = [
         "message": location(LAT, LON, geodetic_m=-60.0),
         "expect": {"lat": 10.0, "lon": 20.0,
                    "altitude_m": -60.0, "altitude_ref": "absolute",
-                   "height_m": "N/A", "height_ref": "N/A",
+                   "height_m": None, "height_ref": "N/A",
                    "speed_mps": 10.0, "vspeed_mps": 0.0, "direction_deg": 90},
     },
     {
@@ -306,8 +306,10 @@ def main():
                  "Each case is a 25-byte message in hex and the fields a decoder should "
                  "produce from it. Intended for checking a second implementation — an "
                  "ESP32 in C, or your own tracker — against the same cases the Python "
-                 "decoder is checked against. Absent values are the string \"N/A\"; an "
-                 "empty expect object means the message carries no usable data."),
+                 "decoder is checked against. An absent numeric value is null; an absent "
+                 "reference string (altitude_ref, height_ref, uas_id) is the string "
+                 "\"N/A\"; an empty expect object means the message carries no usable "
+                 "data."),
         "generated_by": "tests/build_odid_vectors.py",
         "cases": out,
     }

@@ -80,11 +80,35 @@ def test_absolute_only_broadcast():
     """
     print("\nan aircraft broadcasting no height")
     out = odid_decode.decode_location(location_message(geodetic_m=219.5))
-    ok = check("height is absent rather than invented", out.get("height_m") == "N/A",
-               str(out.get("height_m")))
+    # None, not the string "N/A": the server validates height_m as a number and refuses
+    # the whole detection if it arrives as "N/A", so every sighting of exactly these
+    # aircraft was being dropped on ingest. None travels as JSON null, which is accepted.
+    ok = check("an absent height is null, not the word for absent",
+               out.get("height_m") is None, repr(out.get("height_m")))
     ok &= check("altitude falls back to absolute, and says so",
                 out.get("altitude_ref") == "absolute" and out.get("altitude_m") == 219.5,
                 f"{out.get('altitude_ref')}, {out.get('altitude_m')}")
+    return ok
+
+
+def test_no_vertical_data_is_null():
+    """A position with no height and no absolute altitude must report both as null.
+
+    "N/A" in a numeric field is what the central server's validator refuses, discarding
+    the entire detection — so an absent number has to be None (→ JSON null), never a
+    string. The *_ref fields stay the string "N/A" because they are genuinely strings.
+    """
+    print("\nno vertical data at all is null, not \"N/A\"")
+    out = odid_decode.decode_location(location_message())
+    ok = check("altitude_m is null when absent", out.get("altitude_m") is None,
+               repr(out.get("altitude_m")))
+    ok &= check("height_m is null when absent", out.get("height_m") is None,
+                repr(out.get("height_m")))
+    # The string reference fields are still the word, because they are strings.
+    ok &= check("altitude_ref stays the string \"N/A\"", out.get("altitude_ref") == "N/A",
+                repr(out.get("altitude_ref")))
+    ok &= check("height_ref stays the string \"N/A\"", out.get("height_ref") == "N/A",
+                repr(out.get("height_ref")))
     return ok
 
 
@@ -138,6 +162,7 @@ TESTS = [
     test_height_and_altitude_are_both_reported,
     test_height_type_flag_is_read,
     test_absolute_only_broadcast,
+    test_no_vertical_data_is_null,
     test_null_island_is_treated_as_no_data,
     test_position_is_decoded,
 ]

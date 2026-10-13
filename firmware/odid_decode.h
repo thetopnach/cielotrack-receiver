@@ -28,9 +28,10 @@
 #define ODID_MESSAGE_TYPE_PACKED 0xF
 
 /* Every message type shares this: a field is either present or it is not, and absent
- * must never be represented by a plausible-looking zero. The Python side says "N/A";
- * here a has_* flag carries the same meaning without inventing a sentinel value that
- * could be mistaken for a reading. */
+ * must never be represented by a plausible-looking zero. The Python side reports an
+ * absent numeric field as null (and keeps the string "N/A" only for the reference
+ * fields that are genuinely strings); here a has_* flag carries the same present-or-not
+ * meaning without inventing a sentinel value that could be mistaken for a reading. */
 
 typedef enum {
     ODID_HEIGHT_TAKEOFF = 0,   /* above the takeoff point */
