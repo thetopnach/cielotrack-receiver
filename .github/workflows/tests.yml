@@ -50,6 +50,9 @@ jobs:
       - name: write failures are reported then clear
         if: always()
         run: python3 tests/test_receiver_state.py write_failures_are_reported_then_clear
+      - name: the outbox split names rejected rows
+        if: always()
+        run: python3 tests/test_receiver_state.py the_outbox_split_names_rejected_rows
 
   claim:
     name: claim request

@@ -316,6 +316,10 @@ HEARTBEAT_WARMUP_SECONDS = 20
 # Matches the Wi-Fi path's retry cadence.
 BLE_RETRY_SECONDS = 10
 OUTBOX_BATCH_SIZE = 20
+# How much of the top rejection reason rides along in the heartbeat. Enough to read the
+# fault at a glance on the fleet page; the full text (already capped at 200 chars when
+# stored) stays in outbox.db for anyone who shells in.
+OUTBOX_REASON_MAX_CHARS = 120
 # Several threads write this file: capture timers enqueue detections, the sync loop
 # marks them sent, and identity writes land from finalisation. Without a busy timeout
 # the loser of a race raises "database is locked" immediately and the caller loses
@@ -762,12 +766,34 @@ def collect_radio_status():
         elif wifi["mode"] != "monitor":
             problems.append("wifi_not_monitor")
 
+    # Split what is genuinely waiting to upload from what the server has already
+    # refused. A rejected row keeps sent_at NULL forever — it is kept, not deleted, and
+    # excluded from every future batch (sync_outbox selects WHERE error IS NULL) — so a
+    # plain `sent_at IS NULL` count folds dead rows into the live queue and never drains.
+    # That is exactly how the height_m="N/A" bug read on the fleet page: a receiver
+    # "stuck" at 80-odd queued that was in fact uploading fine and simply holding that
+    # many permanently-refused rows. `outbox_rejected` names them as a data-quality fault
+    # rather than a backlog, and the top reason travels with the heartbeat so an operator
+    # sees *why* without shelling into the Pi.
+    pending = rejected = rejected_reason = None
     try:
         conn = sqlite3.connect(OUTBOX_DB, timeout=SQLITE_BUSY_TIMEOUT)
-        pending = conn.execute("SELECT COUNT(*) FROM outbox WHERE sent_at IS NULL").fetchone()[0]
+        pending, rejected = conn.execute(
+            "SELECT COUNT(*) FILTER (WHERE sent_at IS NULL AND error IS NULL), "
+            "       COUNT(*) FILTER (WHERE sent_at IS NULL AND error IS NOT NULL) "
+            "FROM outbox").fetchone()
+        if rejected:
+            # Cheap: a GROUP BY over the handful of refused rows, only when there are
+            # any. Truncated because the reason is for a glance on the fleet page, not
+            # the full stored text (which sync_outbox already caps at 200 chars).
+            top = conn.execute(
+                "SELECT error FROM outbox WHERE sent_at IS NULL AND error IS NOT NULL "
+                "GROUP BY error ORDER BY COUNT(*) DESC, error LIMIT 1").fetchone()
+            if top and top[0]:
+                rejected_reason = top[0][:OUTBOX_REASON_MAX_CHARS]
         conn.close()
     except Exception:
-        pending = None
+        pending = rejected = rejected_reason = None
 
     # Writes that failed since the last heartbeat. These are the faults a healthy-looking
     # receiver hides: capture, decoding and the heartbeat itself all keep working while
@@ -792,6 +818,8 @@ def collect_radio_status():
         "wifi": wifi,
         "last_detection_at": dict(radio_state["last_detection_at"]),
         "outbox_pending": pending,
+        "outbox_rejected": rejected,
+        "outbox_rejected_reason": rejected_reason,
         "enqueue_failures": failures["enqueue_failures"],
         "status_write_failures": failures["status_write_failures"],
         "position": configured_position(),

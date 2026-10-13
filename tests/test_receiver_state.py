@@ -300,6 +300,72 @@ def test_rejected_releases_are_reported():
         rt.REJECTED_FILE = original_rejected
 
 
+def test_the_outbox_split_names_rejected_rows():
+    """Rows the server refused must not read as a live upload backlog.
+
+    A rejected row keeps sent_at NULL forever — it is kept for inspection and excluded
+    from every future batch — so counting `sent_at IS NULL` folds dead rows into the
+    queue and the number never drains. That is exactly how the height_m="N/A" bug showed
+    up: a receiver "stuck" at 80-odd queued that was uploading fine and simply holding
+    that many permanently-refused rows. outbox_pending must count only what can still be
+    sent; outbox_rejected names the parked rows; outbox_rejected_reason carries the most
+    common reason so the fault is readable without shelling into the Pi.
+    """
+    print("\ntest_the_outbox_split_names_rejected_rows")
+    import sqlite3
+    original_position = rt.configured_position
+    original_wifi = rt.WIFI_INTERFACE
+    original_db = rt.OUTBOX_DB
+    rt.configured_position = lambda: None
+    rt.WIFI_INTERFACE = None
+    rt.radio_state["ble_stream"] = None
+    rt.radio_state["ble_mode"] = "extended"
+    directory = tempfile.mkdtemp()
+    rt.OUTBOX_DB = os.path.join(directory, "outbox.db")
+
+    def enqueue(error=None, sent_at=None):
+        conn = sqlite3.connect(rt.OUTBOX_DB, timeout=rt.SQLITE_BUSY_TIMEOUT)
+        conn.execute(
+            "INSERT INTO outbox (payload_json, created_at, sent_at, error) VALUES (?, ?, ?, ?)",
+            ("{}", "2026-10-12T00:00:00Z", sent_at, error))
+        conn.commit()
+        conn.close()
+
+    try:
+        rt.init_outbox_db()
+
+        empty = rt.collect_radio_status()
+        ok = check("an empty outbox has nothing pending and nothing rejected",
+                   empty["outbox_pending"] == 0 and empty["outbox_rejected"] == 0
+                   and empty["outbox_rejected_reason"] is None,
+                   f"{empty['outbox_pending']}, {empty['outbox_rejected']}, "
+                   f"{empty['outbox_rejected_reason']}")
+
+        for _ in range(3):
+            enqueue()                                   # genuinely waiting
+        enqueue(sent_at="2026-10-12T00:01:00Z")         # already uploaded
+        for _ in range(2):
+            enqueue(error="height_m must be a number, got 'N/A'")   # refused, most common
+        enqueue(error="serial too long")               # refused, a different reason
+
+        status = rt.collect_radio_status()
+        ok &= check("pending counts only rows that can still be sent",
+                    status["outbox_pending"] == 3, str(status["outbox_pending"]))
+        ok &= check("rejected rows are counted separately, not folded into the queue",
+                    status["outbox_rejected"] == 3, str(status["outbox_rejected"]))
+        ok &= check("the most common reason travels with the heartbeat",
+                    status["outbox_rejected_reason"] == "height_m must be a number, got 'N/A'",
+                    str(status["outbox_rejected_reason"]))
+        ok &= check("a rejected pile is not reported as a radio fault",
+                    "detections_not_queued" not in status["problems"],
+                    str(status["problems"]))
+        return ok
+    finally:
+        rt.configured_position = original_position
+        rt.WIFI_INTERFACE = original_wifi
+        rt.OUTBOX_DB = original_db
+
+
 def test_frames_are_counted_whether_or_not_they_decode():
     """The counter has to separate a dead radio from an empty sky.
 
@@ -421,6 +487,7 @@ TESTS = [
     test_concurrent_transports_do_not_corrupt_state,
     test_write_failures_are_reported_then_clear,
     test_rejected_releases_are_reported,
+    test_the_outbox_split_names_rejected_rows,
     test_frames_are_counted_whether_or_not_they_decode,
     test_the_status_file_still_publishes_iso_timestamps,
 ]
