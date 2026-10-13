@@ -154,6 +154,124 @@ anything is in the air, so a protocol missing from `frames_seen` entirely is a r
 that is not delivering — not a quiet sky. Check it against `radios.problems`, which
 reports what the adapter says about itself; this reports what it is actually doing.
 
+## Bluetooth / BLE Long Range setup & troubleshooting
+
+The receiver tries to start **Bluetooth 5 extended scanning**, which is the only way to
+hear drones broadcasting Remote ID over Bluetooth 5 Long Range (the Coded PHY). When the
+controller rejects that, it falls back to **legacy** scanning and raises
+`ble_legacy_scanning` in `radios.problems`. The log line to look for is:
+
+```
+📡 BLE: extended scanning active (1M + Coded PHY / Long Range)
+```
+
+A legacy line instead does **not** always mean a wrong or broken dongle. The recommended
+Realtek adapter (RTL8761B family, which reports HCI/LMP version 5.1 — so it supports Long
+Range by spec) can still fall back on a stock Raspberry Pi OS install for reasons that
+have nothing to do with the chipset: the Bluetooth radio is blocked by `rfkill`, or the
+Realtek firmware and BlueZ are too old to negotiate extended scanning. Both are fixable
+in software, and neither shows up as an obvious error — the first operator to hit this
+saw an `Operation not possible due to RF-Kill` message scroll past and a silent fall back
+to legacy. Work through the steps below in order.
+
+**1. Confirm the dongle is the adapter in use, not the Pi's onboard radio.** A stock Pi
+enables its own Bluetooth radio, which takes an `hci` index of its own and usually can't
+do extended advertising. The receiver prefers a USB adapter and says which one it chose
+at startup:
+
+```bash
+journalctl -u cielotrack-receiver | grep "BLE:"
+# 📋 BLE: 2 adapters present; using hci1 (USB) rather than hci0. Set BLE_INTERFACE to override.
+hciconfig -a                       # lists every adapter; note which hciN is the USB Bus
+```
+
+If the wrong adapter is being used — or you want to remove the ambiguity for good — pin
+it in `.env` and restart:
+
+```bash
+echo 'BLE_INTERFACE=hci1' | sudo tee -a /opt/cielotrack-receiver/.env
+sudo systemctl restart cielotrack-receiver
+```
+
+**2. Check the dongle is Bluetooth 5 capable.** Replace `hciX` with your dongle's index:
+
+```bash
+sudo hciconfig hciX version
+#   HCI Version: 5.1 (0xa)   LMP Version: 5.1 (0xa)
+```
+
+`LMP Version` 5.0 or higher means the controller supports Long Range by spec. A 4.x dongle
+genuinely cannot do this and there is nothing to fix — buy a Bluetooth 5 adapter. A 5.x
+dongle that still falls back is what the rest of these steps are for.
+
+**3. Clear the rfkill block and make it stick.** This is the single most common cause, and
+it is specific to how this receiver runs: `provision.sh` masks `bluetoothd` (it fights
+`hcitool` over the controller), and `bluetoothd` is normally what clears the Bluetooth
+`rfkill` soft-block at boot. With it masked, nothing does — so an adapter that is soft-blocked
+stays blocked and every extended-scan command fails with `RF-Kill`.
+
+```bash
+rfkill list                        # look for Bluetooth → "Soft blocked: yes"
+sudo rfkill unblock bluetooth
+rfkill list                        # should now read "Soft blocked: no"
+```
+
+To make it survive a reboot, mask the service that re-applies it rather than fighting it
+each boot:
+
+```bash
+sudo systemctl disable --now systemd-rfkill.service systemd-rfkill.socket
+sudo reboot
+```
+
+**4. Update the Realtek firmware and Bluetooth stack.** Extended scanning negotiates only
+with a current `linux-firmware` (the RTL8761B blobs) and a recent BlueZ. A fresh Pi OS
+image is often old enough to miss both:
+
+```bash
+sudo apt update && sudo apt full-upgrade
+sudo reboot
+```
+
+After the reboot, confirm the Realtek firmware actually loaded:
+
+```bash
+dmesg | grep -i rtl
+# Bluetooth: hci1: RTL: examining hci_ver=0a hci_rev=... lmp_ver=0a ...
+# Bluetooth: hci1: RTL: loading rtl_bt/rtl8761bu_fw.bin
+# Bluetooth: hci1: RTL: fw version ...
+```
+
+A `failed to load` line here (rather than `fw version`) means the firmware package is still
+missing — `sudo apt install linux-firmware` and reboot again.
+
+**5. Verify you got extended scanning.** Two independent checks. The receiver's own view,
+in `status.json`:
+
+```bash
+sudo cat /var/lib/cielotrack/status.json | grep -A2 '"ble"'
+#   "ble": { "mode": "extended", "stream_alive": true }
+```
+
+`radios.ble.mode` is `"extended"` when it worked and `"legacy"` when it fell back; in
+legacy, `radios.problems` also carries `ble_legacy_scanning`. And the controller's own
+advertised capabilities:
+
+```bash
+sudo btmgmt info
+# look for "le" in supported settings and a current controller version; a 5.x
+# controller with firmware loaded is what makes extended scanning negotiable
+```
+
+**What legacy still gets you.** Legacy scanning is not a dead receiver. It hears every
+drone that broadcasts standard Bluetooth 4 / 1M-PHY Remote ID, which is most of the
+common ones — in this fleet, Amazon's MK30 is heard over Bluetooth and shows up fine on a
+legacy-only box. What extended scanning adds is **Bluetooth 5 Long Range (Coded PHY)**
+coverage: aircraft that transmit only on the Coded PHY are inaudible to a legacy scanner.
+So a receiver that falls back to legacy during setup is already useful and worth leaving
+running while you work through the steps above — you are extending its range, not
+switching it on.
+
 ## Updates
 
 The receiver updates itself overnight, and you should know exactly what that means
@@ -312,7 +430,10 @@ Bluetooth 4 cannot see. The tracker logs which mode it got:
 📡 BLE: extended scanning active (1M + Coded PHY / Long Range)
 ```
 
-If it says legacy instead, the adapter or driver doesn't support what's needed.
+If it says legacy instead, a Bluetooth 4 dongle genuinely can't do this — but a Bluetooth
+5 dongle that still falls back usually can, and is blocked by `rfkill` or stale Realtek
+firmware rather than by hardware. See [Bluetooth / BLE Long Range setup &
+troubleshooting](#bluetooth--ble-long-range-setup--troubleshooting).
 
 **Don't rotate Wi-Fi channels — but know why.** A rotating scan is away from any given
 channel most of the time, so it misses beacons on the one that matters. Parking on 6 is
