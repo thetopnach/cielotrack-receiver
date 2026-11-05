@@ -42,6 +42,7 @@
 #include "health.h"
 #include "esp_timer.h"
 #include "wifi_capture.h"
+#include "wifi_reset_console.h"
 
 static const char *TAG = "cielotrack";
 
@@ -442,6 +443,12 @@ void app_main(void) {
     /* Extension seam: lets an out-of-tree overlay initialise itself (and links it in).
      * No-op in the open build. See receiver_ext.h. */
     receiver_ext_init();
+
+    /* Before uplink_start(), which blocks while provisioning: starting the console first
+     * means `resetwifi` is reachable even on a board sitting in provisioning, and on one
+     * that is provisioned but cannot find its old network — the two states where someone
+     * actually needs it. */
+    wifi_reset_console_start();
 
 #if !CIELOTRACK_ROLE_WIFI
     reports = xQueueCreate(REPORT_QUEUE_DEPTH, sizeof(uplink_contact_t));
