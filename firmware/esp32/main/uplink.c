@@ -26,6 +26,7 @@
 #include "claim.h"
 #include "provisioning.h"
 #include "secrets.h"
+#include "sntp_nudge.h"
 
 #if !defined(CIELOTRACK_SENSOR_ONLY)
 #define CIELOTRACK_SENSOR_ONLY 0
@@ -80,6 +81,49 @@ static uint32_t heartbeat_count, heartbeat_failed_count;
 static volatile bool station_held;
 
 #if !CIELOTRACK_SENSOR_ONLY
+/* True once esp_netif_sntp_init() has run. Guards against a connection event arriving
+ * mid-startup — before SNTP exists to be restarted — and asking for the time anyway. */
+static volatile bool sntp_started;
+
+/* Fires the short re-nudge sequence described in sntp_nudge.h, one esp_timer one-shot
+ * re-armed after each attempt. Written only from the event task (arm) and the timer task
+ * (callback); every nudge is an idempotent no-op once the clock is set, so the attempt
+ * counter needs no stronger synchronisation than the existing station_held flag does. */
+static esp_timer_handle_t clock_nudge_timer;
+static int clock_nudge_attempt;
+
+static void clock_nudge_cb(void *arg) {
+    (void)arg;
+    if (events == NULL) return;
+    if (xEventGroupGetBits(events) & CLOCK_BIT) return;   /* clock set — stop */
+    uplink_resync_clock();                                /* connection- and clock-guarded */
+    uint32_t next_ms = sntp_nudge_backoff_ms(++clock_nudge_attempt);
+    if (next_ms && clock_nudge_timer) {
+        esp_timer_start_once(clock_nudge_timer, (uint64_t)next_ms * 1000);
+    }
+}
+
+static void arm_clock_nudge(void) {
+    if (clock_nudge_timer == NULL) return;
+    /* Harmless if it was not running; it will be on a reconnect, and a fresh sequence
+     * must start from the first delay rather than wherever the last one stopped. */
+    esp_timer_stop(clock_nudge_timer);
+    clock_nudge_attempt = 1;
+    esp_timer_start_once(clock_nudge_timer, (uint64_t)sntp_nudge_backoff_ms(1) * 1000);
+}
+
+/* Called the moment the station has an address. Besides raising CONNECTED_BIT, it asks
+ * for the time straight away rather than leaving it to the first upload or heartbeat
+ * cycle to notice there is no clock, then keeps nudging briefly in case this first
+ * attempt missed. Without it a freshly provisioned board over a quiet sky — nothing to
+ * stamp, so nothing to trigger the detection-path resync — could wait out SNTP's
+ * hour-long retry before its clock set and it sent its first heartbeat. */
+static void on_network_up(void) {
+    xEventGroupSetBits(events, CONNECTED_BIT);
+    uplink_resync_clock();
+    arm_clock_nudge();
+}
+
 /* Reconnect forever rather than giving up after N tries. A receiver on a shelf outlives
  * every router reboot it will ever see, and a firmware that stops trying after five
  * minutes turns a thirty-second outage into a dead unit nobody notices until they check.
@@ -95,7 +139,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
          * event that exists to announce a lease would be depending on the very step
          * this configuration removes. */
         ESP_LOGI(TAG, "network up: " CIELOTRACK_STATIC_IP " (static)");
-        xEventGroupSetBits(events, CONNECTED_BIT);
+        on_network_up();
 #endif
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *gone = (wifi_event_sta_disconnected_t *)data;
@@ -144,7 +188,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *got = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "network up: " IPSTR, IP2STR(&got->ip_info.ip));
-        xEventGroupSetBits(events, CONNECTED_BIT);
+        on_network_up();
     }
 }
 #endif
@@ -192,6 +236,13 @@ void uplink_hold_station(bool hold) { (void)hold; }
 
 void uplink_start(void) {
     events = xEventGroupCreate();
+
+    /* Created before the network can come up, so the first GOT_IP already has a timer to
+     * arm. The callback is a no-op until SNTP is initialised (sntp_started) and once the
+     * clock is set, so an early firing costs nothing. */
+    esp_timer_create_args_t nudge_args = { .callback = clock_nudge_cb,
+                                           .name = "clock_nudge" };
+    ESP_ERROR_CHECK(esp_timer_create(&nudge_args, &clock_nudge_timer));
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -264,6 +315,13 @@ void uplink_start(void) {
     sntp.sync_cb = clock_synced;
     sntp.start = true;
     ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
+    sntp_started = true;
+
+    /* If the network came up while this function was still starting SNTP, the event
+     * handler's immediate nudge was suppressed by the sntp_started guard — so ask once
+     * more now that there is something to restart. The backoff timer, if it armed, keeps
+     * going regardless. */
+    uplink_resync_clock();
 }
 
 bool uplink_connected(void) {
@@ -283,6 +341,7 @@ bool uplink_connected(void) {
  * Safe to call when the clock is already set, and safe to call repeatedly. */
 void uplink_resync_clock(void) {
     if (events == NULL) return;
+    if (!sntp_started) return;   /* SNTP not initialised yet; nothing to restart */
     if (xEventGroupGetBits(events) & CLOCK_BIT) return;
     if (!uplink_connected()) return;
     ESP_LOGI(TAG, "no clock yet; asking for the time again");
