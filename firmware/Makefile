@@ -11,7 +11,7 @@ BUILD   := build
 
 .PHONY: test clean vectors
 
-test: $(BUILD)/test_vectors $(BUILD)/test_ble $(BUILD)/test_pack $(BUILD)/test_wifi_rid $(BUILD)/test_identity_cache $(BUILD)/test_peer_link $(BUILD)/test_contact_json $(BUILD)/test_contact_time $(BUILD)/test_health $(BUILD)/decode_cli $(BUILD)/extract_cli $(BUILD)/pack_cli $(BUILD)/label_cli
+test: $(BUILD)/test_vectors $(BUILD)/test_ble $(BUILD)/test_pack $(BUILD)/test_wifi_rid $(BUILD)/test_identity_cache $(BUILD)/test_peer_link $(BUILD)/test_contact_json $(BUILD)/test_contact_time $(BUILD)/test_health $(BUILD)/test_sntp_nudge $(BUILD)/decode_cli $(BUILD)/extract_cli $(BUILD)/pack_cli $(BUILD)/label_cli
 	@$(BUILD)/test_vectors
 	@echo
 	@$(BUILD)/test_ble
@@ -27,6 +27,7 @@ test: $(BUILD)/test_vectors $(BUILD)/test_ble $(BUILD)/test_pack $(BUILD)/test_w
 	@$(BUILD)/test_contact_json
 	@$(BUILD)/test_contact_time
 	@$(BUILD)/test_health
+	@$(BUILD)/test_sntp_nudge
 
 $(BUILD)/test_vectors: odid_decode.c test/test_vectors.c odid_decode.h test/odid_vectors.h
 	@mkdir -p $(BUILD)
@@ -35,6 +36,12 @@ $(BUILD)/test_vectors: odid_decode.c test/test_vectors.c odid_decode.h test/odid
 $(BUILD)/test_health: esp32/main/health.c test/test_health.c esp32/main/health.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ esp32/main/health.c test/test_health.c
+
+# Header-only: the backoff schedule has no ESP-IDF dependency, so the test is the only
+# translation unit and the timer glue in uplink.c is left to the board.
+$(BUILD)/test_sntp_nudge: test/test_sntp_nudge.c esp32/main/sntp_nudge.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $@ test/test_sntp_nudge.c
 
 $(BUILD)/test_contact_time: esp32/main/contact_time.c test/test_contact_time.c esp32/main/contact_time.h
 	@mkdir -p $(BUILD)
