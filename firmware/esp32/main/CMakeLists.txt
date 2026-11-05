@@ -13,6 +13,7 @@ idf_component_register(
          "contact_time.c"
          "health.c"
          "wifi_capture.c"
+         "wifi_reset_console.c"
          "../../wifi_rid.c"
          "../../odid_decode.c"
          "../../identity_cache.c"
@@ -21,6 +22,7 @@ idf_component_register(
     REQUIRES bt nvs_flash esp_timer esp_wifi esp_netif esp_event esp_driver_uart
              espressif__network_provisioning espressif__cjson
              esp_http_client esp-tls mbedtls lwip
+             esp_driver_usb_serial_jtag
 )
 
 # The build actually on the board, so a rollout can be checked rather than assumed —

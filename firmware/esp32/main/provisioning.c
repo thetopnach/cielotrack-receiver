@@ -161,8 +161,21 @@ bool provisioning_start_wifi(void) {
 }
 
 void provisioning_forget(void) {
-    ESP_LOGW(TAG, "erasing stored credentials; the board will restart into provisioning");
-    ESP_ERROR_CHECK(network_prov_mgr_reset_wifi_provisioning());
+    ESP_LOGW(TAG, "erasing stored Wi-Fi credentials; the board will restart into provisioning");
+    /* esp_wifi_restore, not network_prov_mgr_reset_wifi_provisioning: the manager call is
+     * a no-op once a provisioned board has deinitialised the manager at boot (see
+     * provisioning_start_wifi) — and it still returns ESP_OK, so "forget" would reboot
+     * onto the very network it was meant to clear (observed on hardware). esp_wifi_restore
+     * clears the STA config the Wi-Fi driver persisted in NVS — exactly what
+     * network_prov_mgr_is_wifi_provisioned reads on the next boot — and needs only the
+     * Wi-Fi stack, which a provisioned board has running. It touches only the Wi-Fi
+     * driver's own NVS namespace, so the cielotrack namespace (the api_key) is left
+     * intact and the board rejoins as the same receiver once it has a network again. */
+    esp_err_t err = esp_wifi_restore();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_restore failed (%s); the board may still have its old "
+                      "network after the restart", esp_err_to_name(err));
+    }
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
 }
