@@ -79,11 +79,13 @@ odid_location_t odid_decode_location(const uint8_t *msg) {
     out.vspeed_mps = round_to(speed_v_enc * 0.5, 1);
     out.direction_deg = direction_enc + (east_west ? 180 : 0);
 
-    if (height_enc) {
-        out.has_altitude = true;
-        out.altitude_m = round_to(altitude_from(height_enc), 1);
-        out.altitude_ref = ODID_ALT_AGL;
-    } else if (alt_geo_enc || alt_baro_enc) {
+    /* Keep both measurements the Location message carries, rather than letting the Height
+     * displace the absolute altitude. altitude_m is the absolute figure (AltitudeGeo, or
+     * AltitudeBaro as a fallback); height_m is the Height above take-off/ground. We used to
+     * put the Height into altitude_m and drop the absolute altitude, which left a take-off-
+     * referenced height impossible to turn into a height above the ground under the
+     * aircraft. Each field is filled only from its own value. */
+    if (alt_geo_enc || alt_baro_enc) {
         out.has_altitude = true;
         out.altitude_m = round_to(altitude_from(alt_geo_enc ? alt_geo_enc : alt_baro_enc), 1);
         out.altitude_ref = ODID_ALT_ABSOLUTE;
