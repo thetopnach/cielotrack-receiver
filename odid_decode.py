@@ -82,30 +82,28 @@ def decode_location(msg):
         return {}
 
     speed_mps = (255 * 0.25 + speed_h_enc * 0.75) if speed_mult else (speed_h_enc * 0.25)
-    # Height is above-ground/above-takeoff — what actually matters for an FAA ceiling
-    # comparison. AltitudeGeo/AltitudeBaro are absolute WGS84/barometric altitude, which
-    # reads several hundred feet higher anywhere with real ground elevation.
+    # The Location message carries two different vertical measurements, broadcast together:
+    # an absolute altitude (AltitudeGeo from the WGS-84 ellipsoid, or AltitudeBaro as a
+    # fallback) and a Height above the aircraft's take-off point or the ground. They answer
+    # different questions, so keep both — altitude_m is the absolute figure, height_m the
+    # Height — rather than letting one displace the other.
     #
-    # Not every operator broadcasts Height: over the cloud feed, Wing and Zipline send
-    # the "no value" sentinel on every moving aircraft, and silently substituting
-    # absolute altitude made them look like they cruise at ~700 ft against Amazon's
-    # ~185 ft. Report which reference the number actually uses instead of conflating
-    # them — a consumer can then decline to compare an absolute figure against the
-    # 400 ft AGL limit.
+    # We used to store the Height in altitude_m whenever it was present and drop the
+    # absolute altitude entirely. That made a take-off-referenced height (the MK30's)
+    # impossible to turn into a height above the ground beneath the aircraft, because the
+    # absolute altitude that correction needs had been thrown away. Not every aircraft
+    # sends both — Wing and Zipline broadcast only an absolute altitude, others only a
+    # Height — so each field is filled from its own value and left null otherwise. A
+    # consumer reads altitude_ref to know whether altitude_m may be compared to the 400 ft
+    # AGL limit (it cannot) and uses height_m, with height_ref, for the above-ground figure.
     altitude_ref = "N/A"
     altitude_m = None
-    if height_enc:
-        altitude_m, altitude_ref = height_enc * 0.5 - 1000, "agl"
-    elif alt_geo_enc or alt_baro_enc:
+    if alt_geo_enc or alt_baro_enc:
         altitude_m = (alt_geo_enc or alt_baro_enc) * 0.5 - 1000
         altitude_ref = "absolute"
 
-    # Height and absolute altitude are two different measurements broadcast together,
-    # not two ways of saying one thing, so reporting height separately stops the pair
-    # above from having to choose between them. altitude_m keeps its existing meaning —
-    # consumers already branch on altitude_ref — and height_m simply stops the other
-    # number being thrown away. A drone at 47.5 m over a field 172 m above sea level
-    # broadcasts both 47.5 and 219.5, and each answers a different question.
+    # A drone at 47.5 m above its launch pad over a field 172 m above sea level broadcasts
+    # both 47.5 (Height) and 219.5 (absolute), and each answers a different question.
     height_m = round(height_enc * 0.5 - 1000, 1) if height_enc else None
 
     # An absent number is None, which travels as JSON null — never the string "N/A".

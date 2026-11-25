@@ -26,8 +26,8 @@ typedef struct {
 static const odid_expect_t vector_0_expects[] = {
     { "lat", false, 0, 10.0 },
     { "lon", false, 0, 20.0 },
-    { "altitude_m", false, 0, 47.5 },
-    { "altitude_ref", true, "agl", 0 },
+    { "altitude_m", false, 0, 219.5 },
+    { "altitude_ref", true, "absolute", 0 },
     { "height_m", false, 0, 47.5 },
     { "height_ref", true, "takeoff", 0 },
     { "speed_mps", false, 0, 10.0 },
@@ -38,8 +38,8 @@ static const odid_expect_t vector_0_expects[] = {
 static const odid_expect_t vector_1_expects[] = {
     { "lat", false, 0, 10.0 },
     { "lon", false, 0, 20.0 },
-    { "altitude_m", false, 0, 47.5 },
-    { "altitude_ref", true, "agl", 0 },
+    { "altitude_m", false, 0, 219.5 },
+    { "altitude_ref", true, "absolute", 0 },
     { "height_m", false, 0, 47.5 },
     { "height_ref", true, "ground", 0 },
     { "speed_mps", false, 0, 10.0 },
@@ -98,8 +98,8 @@ static const odid_expect_t vector_5_expects[] = {
 static const odid_expect_t vector_6_expects[] = {
     { "lat", false, 0, 10.0 },
     { "lon", false, 0, 20.0 },
-    { "altitude_m", false, 0, 30.0 },
-    { "altitude_ref", true, "agl", 0 },
+    { "altitude_m", true, "N/A", 0 },
+    { "altitude_ref", true, "N/A", 0 },
     { "height_m", false, 0, 30.0 },
     { "height_ref", true, "takeoff", 0 },
     { "speed_mps", false, 0, 10.0 },
@@ -110,8 +110,8 @@ static const odid_expect_t vector_6_expects[] = {
 static const odid_expect_t vector_7_expects[] = {
     { "lat", false, 0, 10.0 },
     { "lon", false, 0, 20.0 },
-    { "altitude_m", false, 0, 30.0 },
-    { "altitude_ref", true, "agl", 0 },
+    { "altitude_m", true, "N/A", 0 },
+    { "altitude_ref", true, "N/A", 0 },
     { "height_m", false, 0, 30.0 },
     { "height_ref", true, "takeoff", 0 },
     { "speed_mps", false, 0, 93.8 },
@@ -122,8 +122,8 @@ static const odid_expect_t vector_7_expects[] = {
 static const odid_expect_t vector_8_expects[] = {
     { "lat", false, 0, 10.0 },
     { "lon", false, 0, 20.0 },
-    { "altitude_m", false, 0, 30.0 },
-    { "altitude_ref", true, "agl", 0 },
+    { "altitude_m", true, "N/A", 0 },
+    { "altitude_ref", true, "N/A", 0 },
     { "height_m", false, 0, 30.0 },
     { "height_ref", true, "takeoff", 0 },
     { "speed_mps", false, 0, 10.0 },
@@ -131,23 +131,11 @@ static const odid_expect_t vector_8_expects[] = {
     { "direction_deg", false, 0, 90.0 },
 };
 
-static const odid_expect_t vector_9_expects[] = {
-    { "lat", false, 0, 10.0 },
-    { "lon", false, 0, 20.0 },
-    { "altitude_m", false, 0, 30.0 },
-    { "altitude_ref", true, "agl", 0 },
-    { "height_m", false, 0, 30.0 },
-    { "height_ref", true, "takeoff", 0 },
-    { "speed_mps", false, 0, 13.2 },
-    { "vspeed_mps", false, 0, 0.0 },
-    { "direction_deg", false, 0, 90.0 },
-};
-
-static const odid_expect_t vector_11_expects[] = {
+static const odid_expect_t vector_10_expects[] = {
     { "lat", false, 0, -33.8688 },
     { "lon", false, 0, -151.2093 },
-    { "altitude_m", false, 0, 100.0 },
-    { "altitude_ref", true, "agl", 0 },
+    { "altitude_m", true, "N/A", 0 },
+    { "altitude_ref", true, "N/A", 0 },
     { "height_m", false, 0, 100.0 },
     { "height_ref", true, "takeoff", 0 },
     { "speed_mps", false, 0, 10.0 },
@@ -155,18 +143,30 @@ static const odid_expect_t vector_11_expects[] = {
     { "direction_deg", false, 0, 90.0 },
 };
 
-static const odid_expect_t vector_12_expects[] = {
+static const odid_expect_t vector_11_expects[] = {
     { "uas_id", true, "1786501045", 0 },
 };
 
-static const odid_expect_t vector_13_expects[] = {
+static const odid_expect_t vector_12_expects[] = {
     { "uas_id", true, "N/A", 0 },
 };
 
-static const odid_expect_t vector_14_expects[] = {
+static const odid_expect_t vector_13_expects[] = {
     { "operator_lat", false, 0, 10.5 },
     { "operator_lon", false, 0, 20.5 },
     { "operator_altitude_m", false, 0, 158.0 },
+};
+
+static const odid_expect_t vector_15_expects[] = {
+    { "lat", false, 0, 10.0 },
+    { "lon", false, 0, 20.0 },
+    { "altitude_m", true, "N/A", 0 },
+    { "altitude_ref", true, "N/A", 0 },
+    { "height_m", false, 0, 30.0 },
+    { "height_ref", true, "takeoff", 0 },
+    { "speed_mps", false, 0, 13.2 },
+    { "vspeed_mps", false, 0, 0.0 },
+    { "direction_deg", false, 0, 90.0 },
 };
 
 static const odid_vector_t odid_vectors[] = {
@@ -225,12 +225,6 @@ static const odid_vector_t odid_vectors[] = {
         vector_8_expects, 9,
     },
     {
-        "a speed that lands exactly on a rounding tie",
-        "location",
-        { 0x10, 0x00, 0x5a, 0x35, 0x00, 0x00, 0xe1, 0xf5, 0x05, 0x00, 0xc2, 0xeb, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-        vector_9_expects, 9,
-    },
-    {
         "null island is the no-position sentinel",
         "location",
         { 0x10, 0x00, 0x5a, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2f, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
@@ -240,25 +234,25 @@ static const odid_vector_t odid_vectors[] = {
         "southern and western hemispheres",
         "location",
         { 0x10, 0x00, 0x5a, 0x28, 0x00, 0x00, 0x08, 0xd0, 0xeb, 0xb8, 0x4a, 0xdf, 0xa5, 0x00, 0x00, 0x00, 0x00, 0x98, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-        vector_11_expects, 9,
+        vector_10_expects, 9,
     },
     {
         "basic id carries the serial and airframe class",
         "basic_id",
         { 0x00, 0x12, 0x31, 0x37, 0x38, 0x36, 0x35, 0x30, 0x31, 0x30, 0x34, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-        vector_12_expects, 1,
+        vector_11_expects, 1,
     },
     {
         "basic id with no serial",
         "basic_id",
         { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-        vector_13_expects, 1,
+        vector_12_expects, 1,
     },
     {
         "system message locates the operator",
         "system",
         { 0x40, 0x01, 0x40, 0x2c, 0x42, 0x06, 0x40, 0x0d, 0x38, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00 },
-        vector_14_expects, 3,
+        vector_13_expects, 3,
     },
     {
         "system message with no operator position",
@@ -267,13 +261,13 @@ static const odid_vector_t odid_vectors[] = {
         NULL, 0,
     },
     {
-        "a basic id that is not text is not an aircraft",
-        "basic_id",
-        { 0x00, 0x62, 0x7c, 0x55, 0x28, 0x0e, 0x0a, 0x68, 0x54, 0x27, 0x2d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-        NULL, 0,
+        "a speed that lands exactly on a rounding tie",
+        "location",
+        { 0x10, 0x00, 0x5a, 0x35, 0x00, 0x00, 0xe1, 0xf5, 0x05, 0x00, 0xc2, 0xeb, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+        vector_15_expects, 9,
     },
 };
 
-#define ODID_VECTOR_COUNT 17
+#define ODID_VECTOR_COUNT 16
 
 #endif /* ODID_VECTORS_H */

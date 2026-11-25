@@ -56,10 +56,11 @@ def test_height_and_altitude_are_both_reported():
     ok = check("height is reported", out.get("height_m") == 47.5, str(out.get("height_m")))
     ok &= check("height reference is above takeoff", out.get("height_ref") == "takeoff",
                 str(out.get("height_ref")))
-    # altitude_m keeps its existing meaning deliberately: consumers already branch on
-    # altitude_ref, so changing which number it holds would move the ground under them.
-    ok &= check("altitude_m keeps preferring the height, as before",
-                out.get("altitude_ref") == "agl" and out.get("altitude_m") == 47.5,
+    # altitude_m now carries the absolute altitude (not the height), so a take-off-
+    # referenced height can later be turned into a height above the ground beneath the
+    # aircraft — the absolute figure that correction needs is no longer discarded.
+    ok &= check("altitude_m carries the absolute altitude, kept alongside the height",
+                out.get("altitude_ref") == "absolute" and out.get("altitude_m") == 219.5,
                 f"{out.get('altitude_ref')}, {out.get('altitude_m')}")
     return ok
 
